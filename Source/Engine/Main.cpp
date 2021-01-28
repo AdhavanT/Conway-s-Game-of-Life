@@ -54,11 +54,6 @@ void PL_entry_point(PL& pl)
 	PL_cleanup_window(pl.window, &pl.memory.main_arena);
 }
 
-struct Ball
-{
-	vec2f pos;
-	f32 radius;
-};
 
 void draw_rectangle(PL_Window* window, vec2ui bottom_left, vec2ui top_right, vec3f color)
 {
@@ -103,50 +98,80 @@ void draw_horizontal_line(PL_Window* window, uint32 y,uint32 from_x,uint32 to_x,
 	}
 }
 
-struct Cell
+typedef Vec2<int64> WorldPos;
+
+struct LiveCellNode
 {
-	b32 state;
+	WorldPos pos;
+	LiveCellNode* next;
 };
 
-struct CellGrid
+struct NewCellNode
 {
-	Cell* first_buffer;
-	Cell* sec_buffer;
-	Cell* front;
-	vec2i cell_dimensions;
-	int32 cell_size;
-	
+	WorldPos pos;
+	NewCellNode* next;
 };
 
-FORCEDINLINE Cell* at(Cell* front, uint32 cell_dimension_x,int32 x, int32 y)
+struct Hashtable
 {
-	return front + (y * cell_dimension_x) + x;
-}
+	LiveCellNode** table_front;
+	MArena arena;
+	MSlice<LiveCellNode> node_list;
+};
 
 struct GameMemory
 {
-	CellGrid cell_grid;
+	//double buffer hashtable
+	uint32 table_size;
+
+	Hashtable table1;
+	Hashtable table2;
+
+	Hashtable* active_table;
+	//------------------------
+	//Camera stuff
+	WorldPos cm_center;
+	uint64 cm_halfwidth;
+	uint64 cm_halfheight;
+
+
 	uint64 prev_update_tick;
 	uint64 update_tick_time;
 	b32 paused;
-
-	Cell* prev_altered_cell;
 };
 
-void cellgrid_update(PL*pl,GameMemory* gm);
+
+
+
+void cellgrid_update_step(PL*pl,GameMemory* gm);
 void render(PL* pl, GameMemory* gm);
 void update(PL* pl, void** game_memory)
 {
 	if (pl->initialized == FALSE)
 	{
-		*game_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(GameMemory), "Game Memory");
+		*game_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(GameMemory), "Game Memory Struct");
 		GameMemory* gm = (GameMemory*)*game_memory;
-		gm->cell_grid.cell_size = 10;
-		gm->cell_grid.cell_dimensions.x = (pl->window.window_bitmap.width - 1) / (gm->cell_grid.cell_size);
-		gm->cell_grid.cell_dimensions.y = (pl->window.window_bitmap.height - 1) / (gm->cell_grid.cell_size);
-		gm->cell_grid.first_buffer = (Cell*)MARENA_PUSH(&pl->memory.main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - first buffer");
-		gm->cell_grid.sec_buffer = (Cell*)MARENA_PUSH(&pl->memory.main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - sec buffer");
-		gm->cell_grid.front = gm->cell_grid.first_buffer;
+
+		//hashtable stuff
+		//table size needs to be a power of 2.
+		gm->table_size = { (2 << 10)}; 
+
+		init_memory_arena(&gm->table1.arena, Megabytes(20));
+		gm->table1.table_front = (LiveCellNode**)MARENA_PUSH(&gm->table1.arena, sizeof(LiveCellNode*) *  gm->table_size, "HashTable-1 -> table");
+		gm->table1.node_list.init(&gm->table1.arena, (char*)"HashTable-1 -> live node list");
+
+
+		init_memory_arena(&gm->table2.arena, Megabytes(20));
+		gm->table2.table_front = (LiveCellNode**)MARENA_PUSH(&gm->table2.arena, sizeof(LiveCellNode*) * gm->table_size , "HashTable-2 -> table");
+		gm->table2.node_list.init(&gm->table2.arena, (char*)"HashTable-2 -> live node list");
+
+		gm->active_table = &gm->table1;
+		//---------------
+
+		//camera stuff
+		gm->cm_center = { 0,0 };
+		gm->cm_halfheight = 20;
+		gm->cm_halfwidth = 20;
 
 		gm->prev_update_tick = pl->time.current_millis;
 		gm->update_tick_time = 100;
@@ -159,20 +184,6 @@ void update(PL* pl, void** game_memory)
 		if (pl->input.mouse.left.pressed)
 		{
 
-			int32 cell_x;
-			int32 cell_y;
-			cell_x = pl->input.mouse.position_x / gm->cell_grid.cell_size;
-			cell_y = pl->input.mouse.position_y / gm->cell_grid.cell_size;
-			if (cell_x < gm->cell_grid.cell_dimensions.x && cell_y < gm->cell_grid.cell_dimensions.y)
-			{
-				Cell* active_cell;
-				active_cell = at(gm->cell_grid.front, gm->cell_grid.cell_dimensions.x, cell_x, cell_y);
-				//if (active_cell != gm->prev_altered_cell)
-				{
-					active_cell->state = !active_cell->state;
-					gm->prev_altered_cell = active_cell;
-				}
-			}
 		}
 	}
 
@@ -181,7 +192,7 @@ void update(PL* pl, void** game_memory)
 		//update grid
 		gm->prev_update_tick = pl->time.current_millis;
 
-		cellgrid_update(pl,gm);
+		cellgrid_update_step(pl,gm);
 	}
 
 	if (pl->input.keys[PL_KEY::SPACE].pressed)
@@ -192,115 +203,215 @@ void update(PL* pl, void** game_memory)
 	render(pl, gm);
 }
 
-void cellgrid_update(PL* pl,GameMemory* gm)
+FORCEDINLINE uint32 hash_pos(WorldPos value)
 {
-	Cell* temp;
-	if (gm->cell_grid.front == gm->cell_grid.first_buffer)
+	//TODO: proper hash function LOL.
+	uint32 hash = (uint32)(value.x * 16 + value.y * 3);
+	return hash;
+}
+
+inline b32 loopup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* front = ht->table_front[slot_index];
+	while (front != 0)
 	{
-		temp = gm->cell_grid.sec_buffer;
+		if (front->pos.x == pos.x && front->pos.y == pos.y)
+		{
+			return TRUE;
+		}
+		front = front->next;
 	}
-	else if(gm->cell_grid.front == gm->cell_grid.sec_buffer)
+	return FALSE;
+}
+
+inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
+{
+	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
+	//append to table list
+	LiveCellNode* iterator = ht->table_front[hash_index];
+	if (iterator == 0)
 	{
-		temp = gm->cell_grid.first_buffer;
+		ht->table_front[hash_index] = new_node;
 	}
 	else
 	{
-		temp = 0;
-		ASSERT(FALSE);	//front isn't set to any of the double buffers. 
+		while (iterator->next != 0)
+		{
+			iterator = iterator->next;
+		}
+		iterator->next = new_node;
+	}
+}
+
+void cellgrid_update_step(PL* pl,GameMemory* gm)
+{
+	Hashtable* next_table;
+	if (gm->active_table == &gm->table1)
+	{
+		next_table = &gm->table2;
+	}
+	else
+	{
+		next_table = &gm->table1;
 	}
 
-	for (int32 y = 1; y < gm->cell_grid.cell_dimensions.y - 1; y++)
-	{
-		for (int32 x = 1; x < gm->cell_grid.cell_dimensions.x - 1; x++)
-		{
-			int32 surrounding = 0;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x , y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y )->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y )->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y + 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x , y + 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y + 1)->state;
+	MSlice<WorldPos, uint32> new_cells_tested;	//used to keep track of all the neighbors of lives cells that have been already processed
+	new_cells_tested.init(&gm->active_table->arena,"new cells process queue");
 
-			b32 current_state = at(gm->cell_grid.front, gm->cell_grid.cell_dimensions.x, x, y)->state;
-			b32 next_state = FALSE;
-			if (current_state == TRUE)
+	//looking through all live cells and their neighbors and processing them.
+	LiveCellNode** prev_table_front = gm->active_table->table_front;
+	for (uint32 table_pos = 0; table_pos < gm->table_size; table_pos++)
+	{
+		if (prev_table_front[table_pos] != 0)
+		{
+			LiveCellNode* list_node = prev_table_front[table_pos];
+			do
 			{
-				if (surrounding == 2 || surrounding == 3)
+				//processing livecell node:
+				//lookup cells around it:
+				//for every cell around it: hash position, lookup value in hash
+				WorldPos* pos = &list_node->pos;
+				WorldPos lookup_pos[8];
+				lookup_pos[0] = { pos->x    , pos->y - 1 };	//bm
+				lookup_pos[1] = { pos->x    , pos->y + 1 };	//tm
+				lookup_pos[2] = { pos->x + 1, pos->y - 1 };	//br
+				lookup_pos[3] = { pos->x + 1, pos->y };		//mr
+				lookup_pos[4] = { pos->x + 1, pos->y + 1 };	//tr
+				lookup_pos[5] = { pos->x - 1, pos->y - 1 };	//bl
+				lookup_pos[6] = { pos->x - 1, pos->y };		//ml
+				lookup_pos[7] = { pos->x - 1, pos->y + 1 };	//tl
+
+				uint32 lookup_pos_hash[8];
+				//TODO: SIMD this.
+				lookup_pos_hash[0] = hash_pos(lookup_pos[0]);
+				lookup_pos_hash[1] = hash_pos(lookup_pos[1]);
+				lookup_pos_hash[2] = hash_pos(lookup_pos[2]);
+				lookup_pos_hash[3] = hash_pos(lookup_pos[3]);
+				lookup_pos_hash[4] = hash_pos(lookup_pos[4]);
+				lookup_pos_hash[5] = hash_pos(lookup_pos[5]);
+				lookup_pos_hash[6] = hash_pos(lookup_pos[6]);
+				lookup_pos_hash[7] = hash_pos(lookup_pos[7]);
+
+				b32 surround_state[8] = {};
+
+				uint32 active_around = 0;
+				for (uint32 i = 0; i < ArrayCount(lookup_pos); i++)
 				{
-					next_state = TRUE;
+					uint32 slot = lookup_pos_hash[i] & (gm->table_size - 1);
+					surround_state[i] = loopup_cell(gm->active_table, slot, lookup_pos[i]);
+					active_around += surround_state[i];
 				}
-				else if (surrounding < 2)
+
+				if (active_around == 2 || active_around == 3)
 				{
-					next_state = FALSE;
+					//Cell survives! Adding to next hashmap. 
+
+					append_new_node(next_table, table_pos, list_node->pos);
 				}
-				else   //surrounding > 3
+				//else cell doesn't survive to next state. 
+
+				//Adding dead cells that are around the live cell to be processed at the end. 
+				for (uint32 i = 0; i < ArrayCount(surround_state); i++)
 				{
-					next_state = FALSE;
+					if (surround_state[i] == FALSE)
+					{
+						//appending new cell to be processed. This is to ensure that the same surrounding 'off' cell isn't processed twice. 
+						WorldPos new_cell_pos = lookup_pos[i];
+
+						WorldPos* front = new_cells_tested.front;
+						for (uint32 i = 0; i < new_cells_tested.size; i++)
+						{
+							if (front->x == new_cell_pos.x && front->y == new_cell_pos.y)
+							{
+								goto SKIP_TEST; //The cell already exists in the list to be processed. no need to add again. 
+							}
+							front++;
+						}
+						new_cells_tested.add(&gm->active_table->arena, new_cell_pos);
+
+
+						//process new cell.
+						WorldPos nc_lookup_pos[8];
+						nc_lookup_pos[0] = { new_cell_pos.x    , new_cell_pos.y - 1 };	//bm
+						nc_lookup_pos[1] = { new_cell_pos.x    , new_cell_pos.y + 1 };	//tm
+						nc_lookup_pos[2] = { new_cell_pos.x + 1, new_cell_pos.y - 1 };	//br
+						nc_lookup_pos[3] = { new_cell_pos.x + 1, new_cell_pos.y };		//mr
+						nc_lookup_pos[4] = { new_cell_pos.x + 1, new_cell_pos.y + 1 };	//tr
+						nc_lookup_pos[5] = { new_cell_pos.x - 1, new_cell_pos.y - 1 };	//bl
+						nc_lookup_pos[6] = { new_cell_pos.x - 1, new_cell_pos.y };		//ml
+						nc_lookup_pos[7] = { new_cell_pos.x - 1, new_cell_pos.y + 1 };	//tl
+
+						b32 nc_surround_state[8] = {2};	//not pre-assigned
+						//preassigning the surrounding state with the already looked up ones. 
+						for (uint32 j = 0; j < ArrayCount(nc_lookup_pos); j++)
+						{
+							for (uint32 ii = 0; ii < ArrayCount(lookup_pos); ii++)
+							{
+								if (nc_lookup_pos[j].x == lookup_pos[ii].x && nc_lookup_pos[j].y == lookup_pos[ii].y)
+								{
+									nc_surround_state[j] = surround_state[ii];
+									break;
+								}
+							}
+						}
+						//performing lookups on the neighboring cells that aren't near the nearby live cell. 
+						for (uint32 j = 0; j < ArrayCount(nc_lookup_pos); j++)
+						{
+							if (nc_surround_state[j] != 2)	//found by the previous lookup 
+							{
+								continue;
+							}
+							else   //performing lookup of cell.
+							{
+								uint32 nc_lookup_hash = hash_pos(nc_lookup_pos[j]);
+								uint32 nc_slot = nc_lookup_hash & (gm->table_size - 1);
+								nc_surround_state[j] = loopup_cell(gm->active_table, nc_slot, nc_lookup_pos[j]);
+							}
+						}
+
+						//now with the completed nc_surrounding_state table, we can judge whether the cell is turned alive or not. 
+						uint32 nc_active_count = 0;
+						for (uint32 j = 0; j < ArrayCount(nc_surround_state); j++)
+						{
+							nc_active_count += nc_surround_state[j];
+							ASSERT(nc_surround_state[j] == 0 || nc_surround_state[j] == 1);
+						}
+
+						if (nc_active_count == 3)	//cell becomes alive!
+						{
+							//adding cell to next hashmap
+							uint32 nc_new_cell_hash = hash_pos(new_cell_pos);
+							uint32 nc_new_cell_index = nc_new_cell_hash & (gm->table_size - 1);
+							append_new_node(next_table, nc_new_cell_index, new_cell_pos);
+						}
+					}
+				SKIP_TEST:;
+
 				}
-			}
-			else
-			{
-				if (surrounding == 3)
-				{
-					next_state = TRUE;
-				}
-				else
-				{
-					next_state = FALSE;
-				}
-			}
-			at(temp, gm->cell_grid.cell_dimensions.x, x, y)->state = next_state;
+
+				list_node = list_node->next;
+			} while (list_node != 0);
 		}
 	}
-	gm->cell_grid.front = temp;
+	//resetting top of the arena to just having the hashtable. 
+	new_cells_tested.clear(&gm->active_table->arena);
+	gm->active_table->node_list.clear(&gm->active_table->arena);
 
+	//Clearing out previous hashtable (setting to zero to clear it out)
+	pl_buffer_set(gm->active_table->arena.base, 0, gm->active_table->arena.top);
+	//setting new active table.
+	gm->active_table = next_table;
 }
 
 void render(PL* pl, GameMemory* gm)
 {
-	//shading in cell grid
-	for (uint32 y = 0; y < (uint32)gm->cell_grid.cell_dimensions.y; y++)
-	{
-		for (uint32 x = 0; x < (uint32)gm->cell_grid.cell_dimensions.x; x++)
-		{
-			vec3f cell_color = { 0 };
-			if (at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x, y)->state == 0)
-			{
-				cell_color = { 0.1f,0.1f,0.1f };
-			}
-			else
-			{
-				cell_color = { 0.5f,0.5f,0.7f };
-			}
-
-			vec2ui bl, tr;
-			bl = { x * gm->cell_grid.cell_size, y * gm->cell_grid.cell_size };
-			tr = { bl.x + gm->cell_grid.cell_size, bl.y + gm->cell_grid.cell_size };
-			draw_rectangle(&pl->window, bl, tr, cell_color);
-		}
-	}
-
-	//drawing grid lines
-	for (int32 y = 0; y <= gm->cell_grid.cell_dimensions.y; y++)
-	{
-		draw_horizontal_line(&pl->window, y * gm->cell_grid.cell_size, 0, gm->cell_grid.cell_size * gm->cell_grid.cell_dimensions.x, { 0.4f, 0.4f, 0.4f });
-	}
-	for (int32 x = 0; x <= gm->cell_grid.cell_dimensions.x; x++)
-	{
-		draw_verticle_line(&pl->window, x * gm->cell_grid.cell_size, 0, gm->cell_grid.cell_size * gm->cell_grid.cell_dimensions.y, { 0.4f, 0.4f, 0.4f });
-	}
+	
 }
 
 void cleanup_game_memory(PL_Memory* arenas, void** game_memory)
 {
 	GameMemory* gm = (GameMemory*)*game_memory;
-	MARENA_POP(&arenas->main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - sec buffer");
-
-	MARENA_POP(&arenas->main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - first buffer");
-
-	
-	MARENA_POP(&arenas->main_arena, sizeof(GameMemory), "Game Memory");
-	*game_memory = NULL;
+	cleanup_memory_arena(&gm->table1.arena);
+	cleanup_memory_arena(&gm->table2.arena);
+	MARENA_POP(&arenas->main_arena, sizeof(GameMemory), "Game Memory Struct");
 }
