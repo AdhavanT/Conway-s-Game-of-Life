@@ -6,7 +6,7 @@ void PL_entry_point(PL& pl)
 {
 	init_memory_arena(&pl.memory.main_arena	, Megabytes(20));
 
-	init_memory_arena(&pl.memory.temp_arena, Megabytes(10));
+	init_memory_arena(&pl.memory.temp_arena, Megabytes(100));
 
 	pl.window.title = (char*)"Renderer";
 	pl.window.window_bitmap.width = 1280;
@@ -74,6 +74,8 @@ void draw_rectangle(PL_Window* window, vec2ui bottom_left, vec2ui top_right, vec
 	}
 }
 
+
+
 void draw_verticle_line(PL_Window* window, uint32 x, uint32 from_y,uint32 to_y,vec3f color)
 {
 	uint32 casted_color = (uint32)(color.r * 255.0f) << 16 | (uint32)(color.g * 255.0f) << 8 | (uint32)(color.b * 255.0f) << 0;
@@ -131,17 +133,64 @@ struct GameMemory
 	//------------------------
 	//Camera stuff
 	WorldPos cm_center;
-	uint64 cm_halfwidth;
-	uint64 cm_halfheight;
-
+	f64 cm_scale;
 
 	uint64 prev_update_tick;
 	uint64 update_tick_time;
 	b32 paused;
 };
 
+FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
+{
+	//TODO: proper hash function LOL.
+	uint32 hash = (uint32)(value.x * 16 + value.y * 3) & (table_size - 1);
+	return hash;
+}
+
+inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* front = ht->table_front[slot_index];
+	while (front != 0)
+	{
+		if (front->pos.x == pos.x && front->pos.y == pos.y)
+		{
+			return TRUE;
+		}
+		front = front->next;
+	}
+	return FALSE;
+}
 
 
+
+inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
+{
+	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
+	//append to table list
+	LiveCellNode* iterator = ht->table_front[hash_index];
+	if (iterator == 0)
+	{
+		ht->table_front[hash_index] = new_node;
+	}
+	else
+	{
+		while (iterator->next != 0)
+		{
+			iterator = iterator->next;
+		}
+		iterator->next = new_node;
+	}
+}
+
+WorldPos screen_to_world(WorldPos screen_coord, f64 scale, WorldPos cm_pos)
+{
+	Vec2<f64> screen_coordf = { (f64)screen_coord.x, (f64)screen_coord.y };
+	screen_coordf = { screen_coordf.x * scale, screen_coordf.y * scale};
+
+	WorldPos world = {(int64)screen_coordf.x,(int64)screen_coordf.y};
+	world += cm_pos;
+	return world;
+}
 
 void cellgrid_update_step(PL*pl,GameMemory* gm);
 void render(PL* pl, GameMemory* gm);
@@ -170,8 +219,7 @@ void update(PL* pl, void** game_memory)
 
 		//camera stuff
 		gm->cm_center = { 0,0 };
-		gm->cm_halfheight = 20;
-		gm->cm_halfwidth = 20;
+		gm->cm_scale = 0.1;
 
 		gm->prev_update_tick = pl->time.current_millis;
 		gm->update_tick_time = 100;
@@ -179,13 +227,30 @@ void update(PL* pl, void** game_memory)
 	}
 	GameMemory* gm = (GameMemory*)*game_memory;
 	
+	if (pl->input.mouse.scroll_delta != 0)
+	{
+		gm->cm_scale += pl->input.mouse.scroll_delta / (f32)30;
+		gm->cm_scale = min(0.9, max(gm->cm_scale, 0.1));
+	}
 	if (gm->paused)
 	{
 		if (pl->input.mouse.left.pressed)
 		{
+			//Set state of cell.
 
+			WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.window_bitmap.width / 2),(int64)pl->input.mouse.position_y - (pl->window.window_bitmap.height / 2) };
+			screen_coords = screen_to_world(screen_coords, gm->cm_scale, gm->cm_center);
+			
+			uint32 slot = hash_pos(screen_coords, gm->table_size);
+			b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+			//add only if state is false (doesn't exist in table). 
+			if (!state)
+			{
+				append_new_node(gm->active_table, slot, screen_coords);
+			}
 		}
 	}
+
 
 	if (!gm->paused && (pl->time.current_millis >= gm->prev_update_tick + gm->update_tick_time))
 	{
@@ -203,45 +268,7 @@ void update(PL* pl, void** game_memory)
 	render(pl, gm);
 }
 
-FORCEDINLINE uint32 hash_pos(WorldPos value)
-{
-	//TODO: proper hash function LOL.
-	uint32 hash = (uint32)(value.x * 16 + value.y * 3);
-	return hash;
-}
 
-inline b32 loopup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
-{
-	LiveCellNode* front = ht->table_front[slot_index];
-	while (front != 0)
-	{
-		if (front->pos.x == pos.x && front->pos.y == pos.y)
-		{
-			return TRUE;
-		}
-		front = front->next;
-	}
-	return FALSE;
-}
-
-inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
-{
-	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
-	//append to table list
-	LiveCellNode* iterator = ht->table_front[hash_index];
-	if (iterator == 0)
-	{
-		ht->table_front[hash_index] = new_node;
-	}
-	else
-	{
-		while (iterator->next != 0)
-		{
-			iterator = iterator->next;
-		}
-		iterator->next = new_node;
-	}
-}
 
 void cellgrid_update_step(PL* pl,GameMemory* gm)
 {
@@ -283,22 +310,22 @@ void cellgrid_update_step(PL* pl,GameMemory* gm)
 
 				uint32 lookup_pos_hash[8];
 				//TODO: SIMD this.
-				lookup_pos_hash[0] = hash_pos(lookup_pos[0]);
-				lookup_pos_hash[1] = hash_pos(lookup_pos[1]);
-				lookup_pos_hash[2] = hash_pos(lookup_pos[2]);
-				lookup_pos_hash[3] = hash_pos(lookup_pos[3]);
-				lookup_pos_hash[4] = hash_pos(lookup_pos[4]);
-				lookup_pos_hash[5] = hash_pos(lookup_pos[5]);
-				lookup_pos_hash[6] = hash_pos(lookup_pos[6]);
-				lookup_pos_hash[7] = hash_pos(lookup_pos[7]);
+				lookup_pos_hash[0] = hash_pos(lookup_pos[0],gm->table_size);
+				lookup_pos_hash[1] = hash_pos(lookup_pos[1],gm->table_size);
+				lookup_pos_hash[2] = hash_pos(lookup_pos[2],gm->table_size);
+				lookup_pos_hash[3] = hash_pos(lookup_pos[3],gm->table_size);
+				lookup_pos_hash[4] = hash_pos(lookup_pos[4],gm->table_size);
+				lookup_pos_hash[5] = hash_pos(lookup_pos[5],gm->table_size);
+				lookup_pos_hash[6] = hash_pos(lookup_pos[6],gm->table_size);
+				lookup_pos_hash[7] = hash_pos(lookup_pos[7],gm->table_size);
 
 				b32 surround_state[8] = {};
 
 				uint32 active_around = 0;
 				for (uint32 i = 0; i < ArrayCount(lookup_pos); i++)
 				{
-					uint32 slot = lookup_pos_hash[i] & (gm->table_size - 1);
-					surround_state[i] = loopup_cell(gm->active_table, slot, lookup_pos[i]);
+					uint32 slot = lookup_pos_hash[i];
+					surround_state[i] = lookup_cell(gm->active_table, slot, lookup_pos[i]);
 					active_around += surround_state[i];
 				}
 
@@ -363,9 +390,9 @@ void cellgrid_update_step(PL* pl,GameMemory* gm)
 							}
 							else   //performing lookup of cell.
 							{
-								uint32 nc_lookup_hash = hash_pos(nc_lookup_pos[j]);
-								uint32 nc_slot = nc_lookup_hash & (gm->table_size - 1);
-								nc_surround_state[j] = loopup_cell(gm->active_table, nc_slot, nc_lookup_pos[j]);
+								uint32 nc_lookup_hash = hash_pos(nc_lookup_pos[j],gm->table_size);
+								uint32 nc_slot = nc_lookup_hash;
+								nc_surround_state[j] = lookup_cell(gm->active_table, nc_slot, nc_lookup_pos[j]);
 							}
 						}
 
@@ -380,8 +407,8 @@ void cellgrid_update_step(PL* pl,GameMemory* gm)
 						if (nc_active_count == 3)	//cell becomes alive!
 						{
 							//adding cell to next hashmap
-							uint32 nc_new_cell_hash = hash_pos(new_cell_pos);
-							uint32 nc_new_cell_index = nc_new_cell_hash & (gm->table_size - 1);
+							uint32 nc_new_cell_hash = hash_pos(new_cell_pos, gm->table_size);
+							uint32 nc_new_cell_index = nc_new_cell_hash;
 							append_new_node(next_table, nc_new_cell_index, new_cell_pos);
 						}
 					}
@@ -396,6 +423,8 @@ void cellgrid_update_step(PL* pl,GameMemory* gm)
 	//resetting top of the arena to just having the hashtable. 
 	new_cells_tested.clear(&gm->active_table->arena);
 	gm->active_table->node_list.clear(&gm->active_table->arena);
+	gm->active_table->node_list.front = 0;
+	gm->active_table->node_list.init(&gm->active_table->arena, gm->active_table->node_list.name);
 
 	//Clearing out previous hashtable (setting to zero to clear it out)
 	pl_buffer_set(gm->active_table->arena.base, 0, gm->active_table->arena.top);
@@ -403,9 +432,140 @@ void cellgrid_update_step(PL* pl,GameMemory* gm)
 	gm->active_table = next_table;
 }
 
+struct FrameBuffer
+{
+	MSlice<WorldPos> buffer;
+	int32 width;
+	int32 height;
+};
+
 void render(PL* pl, GameMemory* gm)
 {
 	
+	pl_buffer_set(pl->window.window_bitmap.buffer, 22, pl->window.window_bitmap.size);
+
+	FrameBuffer fb;
+	fb.width = (int32)pl->window.window_bitmap.width;
+	fb.height = (int32)pl->window.window_bitmap.height;
+	fb.buffer.init_and_allocate(&pl->memory.temp_arena, fb.height * fb.width, "Frame Buffer with WorldPos");
+
+	int32 x_start = -(fb.width /2);
+	int32 x_end = (fb.width % 2 == 0) ? ((-x_start) - 1) : -x_start;
+
+	int32 y_start = -(fb.height / 2);
+	int32 y_end = (fb.height % 2 == 0) ? ((-y_start) - 1) : -y_start;
+	
+	x_end++;
+	y_end++;
+
+	WorldPos* iterator = fb.buffer.front;
+	for (int64 y = y_start; y < y_end; y++)
+	{
+		for (int64 x = x_start; x < x_end; x++)
+		{
+			WorldPos screen_coords = { x , y };
+			*iterator = screen_to_world(screen_coords, gm->cm_scale, gm->cm_center);
+			iterator++;
+		}
+	}
+
+	ASSERT(iterator == (fb.buffer.front + fb.buffer.size ))
+
+	b32 prev_state = {1};
+	uint32* ptr = (uint32*)pl->window.window_bitmap.buffer;
+	WorldPos* it = fb.buffer.front;
+	WorldPos* next = fb.buffer.front;
+	vec3f on_color = { .5f,.5f,0.0f };
+	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
+	for (uint32 y = 0; y < fb.height; y++)
+	{
+		for (uint32 x = 0; x < fb.width; x++)
+		{
+			b32 state; 
+			if (next->x == (next - 1)->x && next->y == (next-1)->y)
+			{
+				state = prev_state;
+			}
+			else
+			{
+				uint32 slot = hash_pos(*next, gm->table_size);
+				state = lookup_cell(gm->active_table, slot, *next);
+				prev_state = state;
+			}
+			if (state)
+			{
+				//set pixel to yellow (on)
+				*ptr = casted_on_color;
+			}
+			ptr++;
+			next++;
+		}
+	}
+	fb.buffer.clear(&pl->memory.temp_arena);
+	
+	//WorldPos world_cm_bounds = { (int64)gm->cm_halfwidth * 2, (int64)gm->cm_halfheight * 2 };
+	//if (world_cm_bounds.x > (int64)pl->window.window_bitmap.width || world_cm_bounds.y > (int64)pl->window.window_bitmap.height)
+	//{
+	//	gm->cm_halfheight = (pl->window.window_bitmap.width / 2);
+	//	gm->cm_halfwidth = (pl->window.window_bitmap.height / 2);
+	//	world_cm_bounds = { (int64)gm->cm_halfwidth * 2, (int64)gm->cm_halfheight * 2 };
+	//}
+
+	////correcting aspect ratio - this really should be an assertion. the aspect ratio should be corrected when performing zoom.  
+	//f32 world_cm_ar = (f32)gm->cm_halfwidth / (f32)gm->cm_halfheight;
+	//f32 screen_cm_ar = (f32)pl->window.window_bitmap.width / (f32)pl->window.window_bitmap.height;
+	//if (world_cm_ar < screen_cm_ar)	//the height of world should be lower
+	//{
+	//	gm->cm_halfheight = (uint64)((f64)screen_cm_ar * (f64)gm->cm_halfwidth);
+	//	world_cm_bounds.y = gm->cm_halfheight * 2;
+	//	world_cm_ar = (f32)gm->cm_halfwidth / (f32)gm->cm_halfheight;
+	//}
+	//uint32 cell_size = pl->window.window_bitmap.width / (uint32)world_cm_bounds.x;
+
+
+	//WorldPos translated_cm_center = { (gm->cm_center.x - (int64)gm->cm_halfwidth),(gm->cm_center.y - (int64)gm->cm_halfheight) };
+	//
+	//vec2f world_to_screen = {(f32)pl->window.window_bitmap.width/ (f32)(2 * gm->cm_halfwidth), (f32)pl->window.window_bitmap.height / (f32)(2 * gm->cm_halfheight) };
+	//ASSERT(world_to_screen.x >= 1.f && world_to_screen.y >= 1.f);	//making sure the world bounds aren't greater than the screen resolution. 
+	//
+	//for (uint32 i = 0; i < gm->active_table->node_list.size; i++)
+	//{
+	//	WorldPos to_render = gm->active_table->node_list[i].pos;
+	//	WorldPos translated_to_screen = to_render - translated_cm_center;
+	//	//clip 
+	//	if (translated_to_screen.x >= world_cm_bounds.x || translated_to_screen.y >= world_cm_bounds.y || translated_to_screen.x < 0 || translated_to_screen.y < 0)
+	//	{
+	//		//dont render
+	//	}
+	//	else
+	//	{
+	//		//translating to screen coordinates
+	//		vec2ui screen_coords;
+	//		screen_coords = { (uint32)((f32)translated_to_screen.x * world_to_screen.x),(uint32)((f32)translated_to_screen.y * world_to_screen.y) };
+
+	//		vec2ui top_right = { screen_coords.x + cell_size, screen_coords.y + cell_size };
+	//		//drawing.
+	//		draw_rectangle(&pl->window, screen_coords, top_right, { 0.5f,0.2f,0.2f });
+	//	}
+	//}
+
+	////Rendering grid lines.
+	//uint32 ypos = 0;
+	//uint32 x_end = cell_size * (uint32)world_cm_bounds.x;
+
+	//for (int64 y = 0; y < world_cm_bounds.y; y++)
+	//{
+	//	draw_horizontal_line(&pl->window, ypos, 0, x_end, { 0.2f,0.2f,0.2f });
+	//	ypos += cell_size;
+	//}
+
+	//uint32 xpos = 0;
+	//uint32 y_end = cell_size * (uint32)world_cm_bounds.y;
+	//for (int64 x = 0; x < world_cm_bounds.x; x++)
+	//{
+	//	draw_verticle_line(&pl->window, xpos, 0, y_end, { 0.2f,0.2f,0.2f });
+	//	xpos += cell_size;
+	//}
 }
 
 void cleanup_game_memory(PL_Memory* arenas, void** game_memory)
