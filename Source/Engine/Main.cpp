@@ -1,4 +1,5 @@
-#include "platform.h"
+#include "app_common.h"
+
 
 void update(PL* pl, void** game_memory);
 void cleanup_game_memory(PL_Memory* arenas, void** game_memory);
@@ -6,13 +7,14 @@ void PL_entry_point(PL& pl)
 {
 	init_memory_arena(&pl.memory.main_arena	, Megabytes(20));
 
-	init_memory_arena(&pl.memory.temp_arena, Megabytes(10));
+	init_memory_arena(&pl.memory.temp_arena, Megabytes(50));
 
 	pl.window.title = (char*)"Renderer";
-	pl.window.window_bitmap.width = 1280;
-	pl.window.window_bitmap.height = 720;
+	pl.window.window_bitmap.width = 1000;
+	pl.window.window_bitmap.height = 1000;
 	pl.window.width = pl.window.window_bitmap.width;
 	pl.window.height= pl.window.window_bitmap.height;
+	pl.window.user_resizable = FALSE;
 
 	pl.window.window_bitmap.bytes_per_pixel  = 4;
 
@@ -54,253 +56,61 @@ void PL_entry_point(PL& pl)
 	PL_cleanup_window(pl.window, &pl.memory.main_arena);
 }
 
-struct Ball
-{
-	vec2f pos;
-	f32 radius;
-};
 
-void draw_rectangle(PL_Window* window, vec2ui bottom_left, vec2ui top_right, vec3f color)
-{
-	int32 width = top_right.x - bottom_left.x;
-	int32 height = top_right.y - bottom_left.y;
-	uint32 casted_color = (uint32)(color.r*255.0f) << 16 | (uint32)(color.g*255.0f) << 8 | (uint32)(color.b*255.0f) << 0;
-	uint32* ptr = (uint32*)window->window_bitmap.buffer + (bottom_left.y * window->window_bitmap.width) + bottom_left.x;
-
-	uint32 end_shift = window->window_bitmap.width - width;
-	for (int y = 0; y < height; y++)
-	{
-		for (int x = 0; x < width; x++)
-		{
-			*ptr = casted_color;
-			ptr++;
-		}
-		ptr += end_shift;
-	}
-}
-
-void draw_verticle_line(PL_Window* window, uint32 x, uint32 from_y,uint32 to_y,vec3f color)
-{
-	uint32 casted_color = (uint32)(color.r * 255.0f) << 16 | (uint32)(color.g * 255.0f) << 8 | (uint32)(color.b * 255.0f) << 0;
-	uint32* ptr = (uint32*)window->window_bitmap.buffer + x + from_y * window->window_bitmap.width;
-
-	for (uint32 i = from_y; i < to_y; i++)
-	{
-		*ptr = casted_color;
-		ptr += window->window_bitmap.width;
-	}
-}
-
-void draw_horizontal_line(PL_Window* window, uint32 y,uint32 from_x,uint32 to_x, vec3f color)
-{
-	uint32 casted_color = (uint32)(color.r * 255.0f) << 16 | (uint32)(color.g * 255.0f) << 8 | (uint32)(color.b * 255.0f) << 0;
-	uint32* ptr = (uint32*)window->window_bitmap.buffer + y * window->window_bitmap.width + from_x;
-
-	for (uint32 i = from_x; i < to_x; i++)
-	{
-		*ptr = casted_color;
-		ptr++;
-	}
-}
-
-struct Cell
-{
-	b32 state;
-};
-
-struct CellGrid
-{
-	Cell* first_buffer;
-	Cell* sec_buffer;
-	Cell* front;
-	vec2i cell_dimensions;
-	int32 cell_size;
-	
-};
-
-FORCEDINLINE Cell* at(Cell* front, uint32 cell_dimension_x,int32 x, int32 y)
-{
-	return front + (y * cell_dimension_x) + x;
-}
-
-struct GameMemory
-{
-	CellGrid cell_grid;
-	uint64 prev_update_tick;
-	uint64 update_tick_time;
-	b32 paused;
-
-	Cell* prev_altered_cell;
-};
-
-void cellgrid_update(PL*pl,GameMemory* gm);
-void render(PL* pl, GameMemory* gm);
 void update(PL* pl, void** game_memory)
 {
 	if (pl->initialized == FALSE)
 	{
-		*game_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(GameMemory), "Game Memory");
-		GameMemory* gm = (GameMemory*)*game_memory;
-		gm->cell_grid.cell_size = 10;
-		gm->cell_grid.cell_dimensions.x = (pl->window.window_bitmap.width - 1) / (gm->cell_grid.cell_size);
-		gm->cell_grid.cell_dimensions.y = (pl->window.window_bitmap.height - 1) / (gm->cell_grid.cell_size);
-		gm->cell_grid.first_buffer = (Cell*)MARENA_PUSH(&pl->memory.main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - first buffer");
-		gm->cell_grid.sec_buffer = (Cell*)MARENA_PUSH(&pl->memory.main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - sec buffer");
-		gm->cell_grid.front = gm->cell_grid.first_buffer;
+		*game_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(AppMemory), "Game Memory Struct");
+		AppMemory* gm = (AppMemory*)*game_memory;
+
+		//hashtable stuff
+		//table size needs to be a power of 2. 
+		gm->table_size = { (2 << 10)}; 
+
+		init_memory_arena(&gm->table1.arena, Megabytes(10));
+		gm->table1.table_front = (LiveCellNode**)MARENA_PUSH(&gm->table1.arena, sizeof(LiveCellNode*) *  gm->table_size, "HashTable-1 -> table");
+		gm->table1.node_list.init(&gm->table1.arena, (char*)"HashTable-1 -> live node list");
+
+
+		init_memory_arena(&gm->table2.arena, Megabytes(10));
+		gm->table2.table_front = (LiveCellNode**)MARENA_PUSH(&gm->table2.arena, sizeof(LiveCellNode*) * gm->table_size , "HashTable-2 -> table");
+		gm->table2.node_list.init(&gm->table2.arena, (char*)"HashTable-2 -> live node list");
+
+		gm->active_table = &gm->table1;
+		//---------------
+		gm->camera_changed = TRUE;
+
+		gm->cell_removed_from_table = FALSE;
+
+		//camera stuff
+		gm->cm.center = { 0,0 };
+		gm->cm.scale = 0.1;
 
 		gm->prev_update_tick = pl->time.current_millis;
 		gm->update_tick_time = 100;
 		pl->initialized = TRUE;
 	}
-	GameMemory* gm = (GameMemory*)*game_memory;
+	AppMemory* gm = (AppMemory*)*game_memory;
 	
-	if (gm->paused)
+
+	handle_input(pl, gm);
+
+	if (gm->update_grid_flag)
 	{
-		if (pl->input.mouse.left.pressed)
-		{
-
-			int32 cell_x;
-			int32 cell_y;
-			cell_x = pl->input.mouse.position_x / gm->cell_grid.cell_size;
-			cell_y = pl->input.mouse.position_y / gm->cell_grid.cell_size;
-			if (cell_x < gm->cell_grid.cell_dimensions.x && cell_y < gm->cell_grid.cell_dimensions.y)
-			{
-				Cell* active_cell;
-				active_cell = at(gm->cell_grid.front, gm->cell_grid.cell_dimensions.x, cell_x, cell_y);
-				//if (active_cell != gm->prev_altered_cell)
-				{
-					active_cell->state = !active_cell->state;
-					gm->prev_altered_cell = active_cell;
-				}
-			}
-		}
-	}
-
-	if (!gm->paused && (pl->time.current_millis >= gm->prev_update_tick + gm->update_tick_time))
-	{
-		//update grid
-		gm->prev_update_tick = pl->time.current_millis;
-
-		cellgrid_update(pl,gm);
-	}
-
-	if (pl->input.keys[PL_KEY::SPACE].pressed)
-	{
-		gm->paused = !gm->paused;
+		cellgrid_update_step(pl,gm);
+		gm->update_grid_flag = FALSE;
 	}
 
 	render(pl, gm);
 }
 
-void cellgrid_update(PL* pl,GameMemory* gm)
-{
-	Cell* temp;
-	if (gm->cell_grid.front == gm->cell_grid.first_buffer)
-	{
-		temp = gm->cell_grid.sec_buffer;
-	}
-	else if(gm->cell_grid.front == gm->cell_grid.sec_buffer)
-	{
-		temp = gm->cell_grid.first_buffer;
-	}
-	else
-	{
-		temp = 0;
-		ASSERT(FALSE);	//front isn't set to any of the double buffers. 
-	}
 
-	for (int32 y = 1; y < gm->cell_grid.cell_dimensions.y - 1; y++)
-	{
-		for (int32 x = 1; x < gm->cell_grid.cell_dimensions.x - 1; x++)
-		{
-			int32 surrounding = 0;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x , y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y - 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y )->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y )->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x - 1, y + 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x , y + 1)->state;
-			surrounding += at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x + 1, y + 1)->state;
-
-			b32 current_state = at(gm->cell_grid.front, gm->cell_grid.cell_dimensions.x, x, y)->state;
-			b32 next_state = FALSE;
-			if (current_state == TRUE)
-			{
-				if (surrounding == 2 || surrounding == 3)
-				{
-					next_state = TRUE;
-				}
-				else if (surrounding < 2)
-				{
-					next_state = FALSE;
-				}
-				else   //surrounding > 3
-				{
-					next_state = FALSE;
-				}
-			}
-			else
-			{
-				if (surrounding == 3)
-				{
-					next_state = TRUE;
-				}
-				else
-				{
-					next_state = FALSE;
-				}
-			}
-			at(temp, gm->cell_grid.cell_dimensions.x, x, y)->state = next_state;
-		}
-	}
-	gm->cell_grid.front = temp;
-
-}
-
-void render(PL* pl, GameMemory* gm)
-{
-	//shading in cell grid
-	for (uint32 y = 0; y < (uint32)gm->cell_grid.cell_dimensions.y; y++)
-	{
-		for (uint32 x = 0; x < (uint32)gm->cell_grid.cell_dimensions.x; x++)
-		{
-			vec3f cell_color = { 0 };
-			if (at(gm->cell_grid.front,gm->cell_grid.cell_dimensions.x,x, y)->state == 0)
-			{
-				cell_color = { 0.1f,0.1f,0.1f };
-			}
-			else
-			{
-				cell_color = { 0.5f,0.5f,0.7f };
-			}
-
-			vec2ui bl, tr;
-			bl = { x * gm->cell_grid.cell_size, y * gm->cell_grid.cell_size };
-			tr = { bl.x + gm->cell_grid.cell_size, bl.y + gm->cell_grid.cell_size };
-			draw_rectangle(&pl->window, bl, tr, cell_color);
-		}
-	}
-
-	//drawing grid lines
-	for (int32 y = 0; y <= gm->cell_grid.cell_dimensions.y; y++)
-	{
-		draw_horizontal_line(&pl->window, y * gm->cell_grid.cell_size, 0, gm->cell_grid.cell_size * gm->cell_grid.cell_dimensions.x, { 0.4f, 0.4f, 0.4f });
-	}
-	for (int32 x = 0; x <= gm->cell_grid.cell_dimensions.x; x++)
-	{
-		draw_verticle_line(&pl->window, x * gm->cell_grid.cell_size, 0, gm->cell_grid.cell_size * gm->cell_grid.cell_dimensions.y, { 0.4f, 0.4f, 0.4f });
-	}
-}
 
 void cleanup_game_memory(PL_Memory* arenas, void** game_memory)
 {
-	GameMemory* gm = (GameMemory*)*game_memory;
-	MARENA_POP(&arenas->main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - sec buffer");
-
-	MARENA_POP(&arenas->main_arena, sizeof(Cell) * gm->cell_grid.cell_dimensions.x * gm->cell_grid.cell_dimensions.y, "Cell List - first buffer");
-
-	
-	MARENA_POP(&arenas->main_arena, sizeof(GameMemory), "Game Memory");
-	*game_memory = NULL;
+	AppMemory* gm = (AppMemory*)*game_memory;
+	cleanup_memory_arena(&gm->table1.arena);
+	cleanup_memory_arena(&gm->table2.arena);
+	MARENA_POP(&arenas->main_arena, sizeof(AppMemory), "Game Memory Struct");
 }

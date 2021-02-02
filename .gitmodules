@@ -2,3 +2,6 @@
 	path = Source/PL
 	url = https://github.com/AdhavanT/PL.git
 	ignore = dirty
+[submodule "ATP"]
+	path = Source/ATProfiler
+	url = https://github.com/AdhavanT/ATProfiler.git
