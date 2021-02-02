@@ -595,70 +595,7 @@ void render(PL* pl, GameMemory* gm)
 	}
 
 	fb.buffer.clear(&pl->memory.temp_arena);
-	
-	//WorldPos world_cm_bounds = { (int64)gm->cm_halfwidth * 2, (int64)gm->cm_halfheight * 2 };
-	//if (world_cm_bounds.x > (int64)pl->window.window_bitmap.width || world_cm_bounds.y > (int64)pl->window.window_bitmap.height)
-	//{
-	//	gm->cm_halfheight = (pl->window.window_bitmap.width / 2);
-	//	gm->cm_halfwidth = (pl->window.window_bitmap.height / 2);
-	//	world_cm_bounds = { (int64)gm->cm_halfwidth * 2, (int64)gm->cm_halfheight * 2 };
-	//}
 
-	////correcting aspect ratio - this really should be an assertion. the aspect ratio should be corrected when performing zoom.  
-	//f32 world_cm_ar = (f32)gm->cm_halfwidth / (f32)gm->cm_halfheight;
-	//f32 screen_cm_ar = (f32)pl->window.window_bitmap.width / (f32)pl->window.window_bitmap.height;
-	//if (world_cm_ar < screen_cm_ar)	//the height of world should be lower
-	//{
-	//	gm->cm_halfheight = (uint64)((f64)screen_cm_ar * (f64)gm->cm_halfwidth);
-	//	world_cm_bounds.y = gm->cm_halfheight * 2;
-	//	world_cm_ar = (f32)gm->cm_halfwidth / (f32)gm->cm_halfheight;
-	//}
-	//uint32 cell_size = pl->window.window_bitmap.width / (uint32)world_cm_bounds.x;
-
-
-	//WorldPos translated_cm_center = { (gm->cm_center.x - (int64)gm->cm_halfwidth),(gm->cm_center.y - (int64)gm->cm_halfheight) };
-	//
-	//vec2f world_to_screen = {(f32)pl->window.window_bitmap.width/ (f32)(2 * gm->cm_halfwidth), (f32)pl->window.window_bitmap.height / (f32)(2 * gm->cm_halfheight) };
-	//ASSERT(world_to_screen.x >= 1.f && world_to_screen.y >= 1.f);	//making sure the world bounds aren't greater than the screen resolution. 
-	//
-	//for (uint32 i = 0; i < gm->active_table->node_list.size; i++)
-	//{
-	//	WorldPos to_render = gm->active_table->node_list[i].pos;
-	//	WorldPos translated_to_screen = to_render - translated_cm_center;
-	//	//clip 
-	//	if (translated_to_screen.x >= world_cm_bounds.x || translated_to_screen.y >= world_cm_bounds.y || translated_to_screen.x < 0 || translated_to_screen.y < 0)
-	//	{
-	//		//dont render
-	//	}
-	//	else
-	//	{
-	//		//translating to screen coordinates
-	//		vec2ui screen_coords;
-	//		screen_coords = { (uint32)((f32)translated_to_screen.x * world_to_screen.x),(uint32)((f32)translated_to_screen.y * world_to_screen.y) };
-
-	//		vec2ui top_right = { screen_coords.x + cell_size, screen_coords.y + cell_size };
-	//		//drawing.
-	//		draw_rectangle(&pl->window, screen_coords, top_right, { 0.5f,0.2f,0.2f });
-	//	}
-	//}
-
-	////Rendering grid lines.
-	//uint32 ypos = 0;
-	//uint32 x_end = cell_size * (uint32)world_cm_bounds.x;
-
-	//for (int64 y = 0; y < world_cm_bounds.y; y++)
-	//{
-	//	draw_horizontal_line(&pl->window, ypos, 0, x_end, { 0.2f,0.2f,0.2f });
-	//	ypos += cell_size;
-	//}
-
-	//uint32 xpos = 0;
-	//uint32 y_end = cell_size * (uint32)world_cm_bounds.y;
-	//for (int64 x = 0; x < world_cm_bounds.x; x++)
-	//{
-	//	draw_verticle_line(&pl->window, xpos, 0, y_end, { 0.2f,0.2f,0.2f });
-	//	xpos += cell_size;
-	//}
 }
 
 void cleanup_game_memory(PL_Memory* arenas, void** game_memory)
