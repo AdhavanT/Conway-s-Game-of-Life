@@ -26,7 +26,8 @@ struct CameraState
 {
 
 	//Camera stuff
-	WorldPos center;
+	WorldPos world_center;
+	vec2f sub_world_center;
 	f64 scale;
 	//------------------------
 
@@ -43,19 +44,25 @@ struct AppMemory
 	Hashtable* active_table;
 	//------------------------
 
-	//table update flags
-	b32 update_grid_flag;
 
+	//input handling memory
 	uint64 prev_update_tick;
 	uint64 update_tick_time;
 	b32 cell_removed_from_table;
 	b32 paused;
+	vec2i prev_mouse_pos;
+	b32 in_panning_mode;
 	//------------------------
 
+	
+	b32 update_grid_flag;	//tells the grid processor to iterate over table instead of stack 
 
 	//renderer update flags
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
+
 	//------------------------
+
+	void* render_memory;
 
 	CameraState cm;
 
@@ -118,12 +125,11 @@ static FORCEDINLINE int64 f64_to_int64(f64 value)
 	return (int64)(value);
 }
 
-static inline WorldPos screen_to_world(WorldPos screen_coord, f64 scale, WorldPos cm_pos)
+static inline WorldPos screen_to_world(WorldPos screen_coord, CameraState cm)
 {
-	Vec2<f64> screen_coordf = { (f64)screen_coord.x, (f64)screen_coord.y };
-	screen_coordf = { screen_coordf.x * scale, screen_coordf.y * scale };
-
-	WorldPos world = { f64_to_int64(screen_coordf.x),f64_to_int64(screen_coordf.y) };
-	world += cm_pos;
+	Vec2<f64> screen_coordf = { (f64)screen_coord.x, (f64)screen_coord.y };	//adding the sub world position to be scaled along with 
+	screen_coordf = { screen_coordf.x * cm.scale , screen_coordf.y * cm.scale };
+	WorldPos world = { f64_to_int64(screen_coordf.x + (f64)cm.sub_world_center.x),f64_to_int64(screen_coordf.y + (f64)cm.sub_world_center.y) };
+	world += cm.world_center;
 	return world;
 }
