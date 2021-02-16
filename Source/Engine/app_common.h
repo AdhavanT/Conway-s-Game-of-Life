@@ -74,10 +74,13 @@ void render(PL* pl, AppMemory* gm);
 
 static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 {
+	//NOTE: If hash algo is changed, respectively change the wide version used during pixel fill.
+
 	//TODO: proper hash function LOL.
 	uint32 hash = (uint32)(value.x * 16 + value.y * 3) & (table_size - 1);
 	return hash;
 }
+
 
 static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
@@ -121,6 +124,19 @@ static FORCEDINLINE int64 f64_to_int64(f64 value)
 	else
 	{
 		value -= 0.5;
+	}
+	return (int64)(value);
+}
+
+static FORCEDINLINE int64 f32_to_int64(f32 value)
+{
+	if (value >= 0.0f)
+	{
+		value += 0.5f;
+	}
+	else
+	{
+		value -= 0.5f;
 	}
 	return (int64)(value);
 }

@@ -111,7 +111,7 @@ void handle_input(PL* pl, AppMemory* gm)
 			//add only if state is false (doesn't exist in table). 
 			if (!state)
 			{
-				pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
+				//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
 				append_new_node(gm->active_table, slot, screen_coords);
 			}
 		}

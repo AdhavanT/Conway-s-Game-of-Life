@@ -5,13 +5,21 @@ void update(PL* pl, void** game_memory);
 void cleanup_game_memory(PL* pl, void** game_memory);
 void PL_entry_point(PL& pl)
 {
-	init_memory_arena(&pl.memory.main_arena	, Megabytes(40));
+	init_memory_arena(&pl.memory.main_arena	, Megabytes(100));
 
 	init_memory_arena(&pl.memory.temp_arena, Megabytes(50));
 
 	pl.window.title = (char*)"Renderer";
-	pl.window.window_bitmap.width = 1280;
-	pl.window.window_bitmap.height = 720;
+	vec2ui dim =
+	{
+		//1920,1080
+		//1280,720
+		//1920, 1079
+		1919, 1079
+		
+	};
+	pl.window.window_bitmap.width = dim.x;
+	pl.window.window_bitmap.height = dim.y;
 	pl.window.width = pl.window.window_bitmap.width;
 	pl.window.height= pl.window.window_bitmap.height;
 	pl.window.user_resizable = FALSE;
@@ -58,20 +66,35 @@ void PL_entry_point(PL& pl)
 	cleanup_memory_arena(&pl.memory.main_arena);
 }
 
+
+#include "ATProfiler/atp.h"
+void print_out_tests(PL& pl);
+ATP_REGISTER(main_update_loop); 
+ATP_REGISTER(cellgrid_update);
+
 void update(PL* pl, void** game_memory)
 {
+	ATP_START(main_update_loop);
+
 	AppMemory* gm = (AppMemory*)*game_memory;
 
 	handle_input(pl, gm);
 
+	//ATP_GET_TESTTYPE(cellgrid_update)->info.test_run_cycles = 0;
 	if (gm->update_grid_flag)
 	{
+		ATP_BLOCK(cellgrid_update);
 		cellgrid_update_step(pl,gm);
 		gm->update_grid_flag = FALSE;
 	}
 
 	render(pl, gm);
+	ATP_END(main_update_loop);
+
+	print_out_tests(*pl);
 }
+
+
 
 void clean_render_memory(PL* pl, AppMemory* gm);
 
@@ -134,4 +157,41 @@ void init(PL* pl, void** game_memory)
 
 		pl->initialized = TRUE;
 	}
+}
+
+void print_out_tests(PL& pl)
+{
+	f64 frequency = (f64)pl.time.cycles_per_second;
+	
+
+	int32 length = ATP::testtype_registry->no_of_testtypes;
+	ATP::TestType* front = ATP::testtype_registry->front;
+	pl_debug_print("\n\n\n\n\n");
+	for (int i = 0; i < length; i++)
+	{
+		if (front->type == ATP::TestTypeFormat::MULTI)
+		{
+			pl_debug_print("	MULTI TEST (ATP->%s):\n", front->name);
+			ATP::TestInfo* index = front->tests.front;
+			uint64 total = 0;
+			for (uint32 i = 0; i < front->tests.size; i++)
+			{
+				total += index->test_run_cycles;
+				f64 ms = (index->test_run_cycles * 1000 / frequency);
+				pl_debug_print("		index:%i:%.*f ms (%.*f s),%I64u\n", i, 3, ms, 4, ms / 1000, index->test_run_cycles);
+				index++;
+			}
+			f64 ms = (total * 1000 / frequency);
+			pl_debug_print("	total:%.*f ms (%.*f s), %I64u\n", 3, ms, 4, ms / 1000, total);
+
+		}
+		else
+		{
+			f64 ms = ATP::get_ms_from_test(*front);
+			pl_debug_print("	Time Elapsed(ATP->%s):%.*f ms (%.*f s)\n", front->name, 3, ms, 4, ms / 1000);
+		}
+		front++;
+	}
+	pl_debug_print("\n\n\n\n\n");
+
 }

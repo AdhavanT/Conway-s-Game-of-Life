@@ -1,8 +1,9 @@
 #include "app_common.h"
-
+#include "ATProfiler/atp.h"
 
 
 void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_table, MSlice<WorldPos, uint32>& new_cells_tested);
+
 
 void cellgrid_update_step(PL* pl, AppMemory* gm)
 {
@@ -25,6 +26,7 @@ void cellgrid_update_step(PL* pl, AppMemory* gm)
 		LiveCellNode* it = gm->active_table->node_list.front;
 		for (uint32 i = 0; i < gm->active_table->node_list.size; i++)
 		{
+			//pl_debug_print("Active Cells:%i\n", gm->active_table->node_list.size);
 			process_cell(it, gm, next_table, new_cells_tested);
 			it++;
 		}
