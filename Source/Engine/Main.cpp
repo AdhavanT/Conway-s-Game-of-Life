@@ -12,10 +12,10 @@ void PL_entry_point(PL& pl)
 	pl.window.title = (char*)"Renderer";
 	vec2ui dim =
 	{
-		//1920,1080
+		1920,1080
 		//1280,720
 		//1920, 1079
-		1919, 1079
+		//1919, 1079
 		
 	};
 	pl.window.window_bitmap.width = dim.x;
