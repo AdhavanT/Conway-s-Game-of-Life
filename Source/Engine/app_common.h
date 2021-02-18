@@ -96,8 +96,17 @@ static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 	return FALSE;
 }
  
+//---d--
+extern int32 max_hash_depth;
+//---d--
+
 static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
 {
+	//---d--
+	int32 depth = 1;
+	//---d--
+
+
 	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
 	//append to table list
 	LiveCellNode* iterator = ht->table_front[hash_index];
@@ -109,10 +118,18 @@ static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos po
 	{
 		while (iterator->next != 0)
 		{
+			//---d--
+			depth++;
+			//---d--
 			iterator = iterator->next;
 		}
 		iterator->next = new_node;
 	}
+	//---d--
+	if (depth > max_hash_depth)
+		max_hash_depth = depth;
+	//---d--
+
 }
 
 static FORCEDINLINE int64 f64_to_int64(f64 value)

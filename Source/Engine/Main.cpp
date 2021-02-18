@@ -3,6 +3,12 @@
 void init(PL* pl, void** game_memory);
 void update(PL* pl, void** game_memory);
 void cleanup_game_memory(PL* pl, void** game_memory);
+
+//---d--
+int32 max_hash_depth = 0;
+
+//---d--
+
 void PL_entry_point(PL& pl)
 {
 	init_memory_arena(&pl.memory.main_arena	, Megabytes(100));
@@ -80,7 +86,10 @@ void update(PL* pl, void** game_memory)
 
 	handle_input(pl, gm);
 
-	//ATP_GET_TESTTYPE(cellgrid_update)->info.test_run_cycles = 0;
+	//stats n stuff
+	pl_debug_print("No. of live cells: %i\n", gm->active_table->node_list.size);
+	pl_debug_print("Max hash depth:%i\n", max_hash_depth);
+
 	if (gm->update_grid_flag)
 	{
 		ATP_BLOCK(cellgrid_update);
@@ -166,7 +175,6 @@ void print_out_tests(PL& pl)
 
 	int32 length = ATP::testtype_registry->no_of_testtypes;
 	ATP::TestType* front = ATP::testtype_registry->front;
-	pl_debug_print("\n\n\n\n\n");
 	for (int i = 0; i < length; i++)
 	{
 		if (front->type == ATP::TestTypeFormat::MULTI)
@@ -188,7 +196,7 @@ void print_out_tests(PL& pl)
 		else
 		{
 			f64 ms = ATP::get_ms_from_test(*front);
-			pl_debug_print("	Time Elapsed(ATP->%s):%.*f ms (%.*f s)\n", front->name, 3, ms, 4, ms / 1000);
+			pl_debug_print("	Time Elapsed(ATP->%s): %I64u, %.*f ms (%.*f s)\n", front->name, front->info.test_run_cycles,3, ms, 4, ms / 1000);
 		}
 		front++;
 	}

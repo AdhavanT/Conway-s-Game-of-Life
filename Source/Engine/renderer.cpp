@@ -86,10 +86,9 @@ void fill_bitmap(Bitmap* dest, vec3f color);
 void calculate_worldpos(AppMemory* gm, FrameBuffer& fb);
 
 ATP_REGISTER(Render);
-ATP_REGISTER(Pixel_Fill);
-ATP_REGISTER(WorldPos_Update);
+ATP_REGISTER(Draw_Every_Pixel);
+ATP_REGISTER(Frame_Buffer_Fill);
 ATP_REGISTER(Draw_Bitmap);
-
 
 
 void render(PL* pl, AppMemory* gm)
@@ -102,14 +101,14 @@ void render(PL* pl, AppMemory* gm)
 
 	FrameBuffer &fb = rm->fb;
 	
-	ATP_START(WorldPos_Update);
+	ATP_START(Frame_Buffer_Fill);
 	if (gm->camera_changed)	//recalculating buffer that holds the hash of each world position for every respective pixel
 	{
 		calculate_worldpos(gm, fb);
 
 		gm->camera_changed = FALSE;
 	}
-	ATP_END(WorldPos_Update);
+	ATP_END(Frame_Buffer_Fill);
 
 	Bitmap world_bitmap;
 
@@ -122,12 +121,6 @@ void render(PL* pl, AppMemory* gm)
 	//pl_buffer_set(pl->window.window_bitmap.buffer, 22, pl->window.window_bitmap.size);
 	//draw_rectangle(&world_bitmap, { 0,0 }, { main_window.width , main_window.height }, { 0.1f,0.1f,0.1f });
 	fill_bitmap(&world_bitmap, { 0.1f,0.1f,0.1f });
-
-
-	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
-
-	vec3f on_color = { .5f,.5f,0.0f };
-	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
 
 
 
@@ -144,11 +137,19 @@ void render(PL* pl, AppMemory* gm)
 
 
 	//for first pixel.
-	ATP_START(Pixel_Fill);
+	ATP_START(Draw_Every_Pixel);
+
+	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
+
+	vec3f on_color = { .5f,.5f,0.0f };
+	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
+
 
 	if (gm->cm.scale < 0.9)
 	{
 #ifdef SIMD_128
+
+#if 1	//NOTE: Using a Y row cache buffer to refer to. This is much slower in debug mode than doing a simple previous pixel check, but WAY faster in O2 mode. 
 
 		//NOTE: Whats going on here:
 		//If two rows have the same Y coords, they are both exactly the same. So, keeping a 'cached' state buffer to refer to. 
@@ -162,7 +163,7 @@ void render(PL* pl, AppMemory* gm)
 		{
 			int64 y_coord = *it;
 			it++;	//to get to the x coordinates, it has to jump across the Y coord. 
-			if (y_coord == prev_y_coord)
+			if (y_coord == prev_y_coord)	//Refer the previous row cache.
 			{
 				for (uint32 x = 0; x < fb.width; x++)
 				{
@@ -175,7 +176,7 @@ void render(PL* pl, AppMemory* gm)
 					it++;
 				}
 			}
-			else
+			else  //Process new row and fill cache.
 			{
 				int64 prev_x_coord = MAXINT64;	//set to maxint64 so first check will fail. 
 				b8 prev_state = 0;
@@ -211,8 +212,57 @@ void render(PL* pl, AppMemory* gm)
 
 		row_state_cache.clear(&pl->memory.temp_arena);
 
+#else	//simple previous x coord check . 
 
-#else
+		int64* it = fb.buffer.front;
+
+		for (uint32 y = 0; y < fb.height; y++)
+		{
+			int64 y_coord = *it;
+			it++;	//to get to the x coordinates, it has to jump across the Y coord. 
+			
+
+			int64 prev_x_coord = MAXINT64;
+			b8 prev_state;
+
+			//----This part processes the first pixel for the y row so that the next pixel can refer to it. 
+			WorldPos pos = { *it, y_coord };
+			uint32 slot = hash_pos(pos, gm->table_size);
+			prev_state = lookup_cell(gm->active_table, slot, pos);
+			if (prev_state)
+			{
+				*ptr = casted_on_color;
+			}
+			ptr++;
+			it++;
+			//------
+			for (uint32 x = 0; x < fb.width - 1; x++)	//Processing the rest of the x coord pixels. 
+			{
+				b8 state;
+				if (*it == *(it-1))	//The x coord is same so uses cached state. 
+				{
+					state = prev_state;
+				}
+				else   //Different x coord so recalculating state and caching it. 
+				{
+					pos.x = *it;
+					uint32 slot = hash_pos(pos, gm->table_size);
+					prev_state = lookup_cell(gm->active_table, slot, pos);
+					state = prev_state;
+				}
+				if (state)
+				{
+					*ptr = casted_on_color;
+				}
+				ptr++;
+				it++;
+			}
+			
+		}
+
+#endif
+
+#else	//Scalar Pixel fill
 		WorldPos* next = fb.buffer.front;
 
 		b32 prev_state = { 1 };
@@ -303,7 +353,7 @@ void render(PL* pl, AppMemory* gm)
 
 	}
 
-	ATP_END(Pixel_Fill);
+	ATP_END(Draw_Every_Pixel);
 
 	ATP_START(Draw_Bitmap);
 	draw_bitmap(&main_window, { 0,0 }, &world_bitmap);
