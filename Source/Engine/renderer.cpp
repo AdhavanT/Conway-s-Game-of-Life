@@ -1,4 +1,4 @@
-#include "renderer.h"
+#include "app_common.h"
 #include "ATProfiler/atp.h"
 
 struct Bitmap
@@ -46,37 +46,11 @@ struct Bitmap
 //Renderer memory.
 struct RM	
 {
-	FrameBuffer fb;
+	MArena rm_arena;
+	MArena rm_temp_arena;
+	FrameBuffer worldpos_fb;
 	Bitmap main_window;
 };
-
-void init_render_memory(PL* pl,AppMemory* gm)
-{
-	gm->render_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(RM), "Render Memory Struct");
-	RM* rm = (RM*)gm->render_memory;
-
-	rm->fb.width = (int32)pl->window.window_bitmap.width;
-	rm->fb.height = (int32)pl->window.window_bitmap.height;
-#ifdef SIMD_128
-	//NOTE: Size to store is the total number of X coordinates = height * width and total number of distinct Y coordinates = height. ( the first element of each row is the y coordinate for the entire row.)
-	//NOTE: in SIMD mode, we're storing the values as int64s instead of worldposs. This uses less space than scalar.
-	rm->fb.buffer.init_and_allocate(&pl->memory.main_arena, (rm->fb.height * rm->fb.width) + rm->fb.height, "Frame Buffer with WorldPos");	
-#else
-	rm->fb.buffer.init_and_allocate(&pl->memory.main_arena, rm->fb.height * rm->fb.width, "Frame Buffer with WorldPos");
-#endif
-
-	rm->main_window.mem_buffer = pl->window.window_bitmap.buffer;
-	rm->main_window.height = pl->window.window_bitmap.height;
-	rm->main_window.width = pl->window.window_bitmap.width;
-}
-
-void clean_render_memory(PL* pl, AppMemory* gm)
-{
-	RM* rm = (RM*)gm->render_memory;
-	rm->fb.buffer.clear(&pl->memory.main_arena);
-
-	MARENA_POP(&pl->memory.main_arena, sizeof(RM), "Render Memory Struct");
-}
 
 
 void draw_rectangle(Bitmap* dest, vec2ui bottom_left, vec2ui top_right, vec3f color);
@@ -90,17 +64,78 @@ ATP_REGISTER(Draw_Every_Pixel);
 ATP_REGISTER(Frame_Buffer_Fill);
 ATP_REGISTER(Draw_Bitmap);
 
+//Gives the main_window bitmap memory and and worldpos framebuffer memory. 
+static void create_window_buffers(RM* rm)
+{
+	rm->main_window.init_mem(&rm->rm_arena, "Main Window Bitmap Buffer");
 
-void render(PL* pl, AppMemory* gm)
+	rm->worldpos_fb.width = (int32)rm->main_window.width;
+	rm->worldpos_fb.height = (int32)rm->main_window.height;
+#ifdef SIMD_128
+	//NOTE: Size to store is the total number of X coordinates = height * width and total number of distinct Y coordinates = height. ( the first element of each row is the y coordinate for the entire row.)
+	//NOTE: in SIMD mode, we're storing the values as int64s instead of worldposs. This uses less space than scalar.
+	rm->worldpos_fb.buffer.init_and_allocate(&rm->rm_arena, (rm->worldpos_fb.height * rm->worldpos_fb.width) + rm->worldpos_fb.height, "Frame Buffer with WorldPos");
+#else
+	rm->worldpos_fb.buffer.init_and_allocate(&rm->rm_arena, rm->worldpos_fb.height * rm->worldpos_fb.width, "Frame Buffer with WorldPos");
+#endif
+
+}
+
+static void destory_window_buffers(RM* rm)
+{
+	//clearing stuff in the permanent render memory arena.
+	rm->worldpos_fb.buffer.clear(&rm->rm_arena);
+	rm->main_window.clear_mem(&rm->rm_arena);
+}
+
+void init_renderer(PL* pl, AppMemory* gm)
+{
+
+		gm->render_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(RM), "Render Memory Struct");
+		RM* rm = (RM*)gm->render_memory;
+
+		rm->rm_arena.capacity = Megabytes(100);
+		init_memory_arena(&rm->rm_arena, rm->rm_arena.capacity, MARENA_PUSH(&pl->memory.main_arena, rm->rm_arena.capacity, "Render Memory Arena"));
+		
+		//NOTE: this is a temporary solution.
+		#ifdef MONITOR_ARENA_USAGE
+				rm->rm_temp_arena.allocations.front = (ArenaOwnerNode*)pl_buffer_alloc(sizeof(ArenaOwnerNode) * ARENAOWNERLIST_CAPACITY);
+		#endif
+
+		//initing and creating window with default values.
+		vec2ui dim =
+		{
+			1920,1080
+			//1280,720
+			//1920, 1079
+			//1919, 1079
+		};
+		rm->main_window.dim = dim;
+		pl->window.title = (char*)"Renderer";
+		pl->window.window_bitmap.width = rm->main_window.dim.x;
+		pl->window.window_bitmap.height = rm->main_window.dim.y;
+		pl->window.width = pl->window.window_bitmap.width;
+		pl->window.height = pl->window.window_bitmap.height;
+		pl->window.user_resizable = TRUE;
+
+		pl->window.window_bitmap.bytes_per_pixel = 4;
+		create_window_buffers(rm);
+		pl->window.window_bitmap.buffer = rm->main_window.mem_buffer;
+
+		PL_initialize_window(pl->window, &pl->memory.main_arena);
+
+}
+
+void update_renderer(PL* pl, AppMemory* gm)
 {
 	ATP_BLOCK(Render);
 	RM* rm = (RM*)gm->render_memory;
 
 	Bitmap& main_window = rm->main_window;
-	
+	FrameBuffer& fb = rm->worldpos_fb;
 
-	FrameBuffer &fb = rm->fb;
-	
+	pl_debug_print("Resolution: [%i, %i]\n", rm->main_window.width, rm->main_window.height);
+
 	ATP_START(Frame_Buffer_Fill);
 	if (gm->camera_changed)	//recalculating buffer that holds the hash of each world position for every respective pixel
 	{
@@ -114,27 +149,9 @@ void render(PL* pl, AppMemory* gm)
 
 
 	world_bitmap.dim = { fb.width , fb.height };
-	world_bitmap.init_mem(&pl->memory.temp_arena, "World Bitmap");
-	
-	//drawing background for world bitmap
-	//TODO: SIMD and optimize all this...it runs like crap. 
-	//pl_buffer_set(pl->window.window_bitmap.buffer, 22, pl->window.window_bitmap.size);
-	//draw_rectangle(&world_bitmap, { 0,0 }, { main_window.width , main_window.height }, { 0.1f,0.1f,0.1f });
+	world_bitmap.init_mem(&rm->rm_temp_arena, "World Bitmap");
+
 	fill_bitmap(&world_bitmap, { 0.1f,0.1f,0.1f });
-
-
-
-	//------------------------Variables set For hash function
-
-	/*__m128i table_capacity_mask = { gm->table_size,gm->table_size,gm->table_size,gm->table_size };
-	__m128i constant_16_4x;
-	constant_16_4x.m128i_i64[0] = 16;
-	constant_16_4x.m128i_i64[1] = 16;
-
-	__m128i constant_3_4x;
-	constant_3_4x.m128i_i64[0] = 3;
-	constant_3_4x.m128i_i64[1] = 3;*/
-
 
 	//for first pixel.
 	ATP_START(Draw_Every_Pixel);
@@ -154,7 +171,7 @@ void render(PL* pl, AppMemory* gm)
 		//NOTE: Whats going on here:
 		//If two rows have the same Y coords, they are both exactly the same. So, keeping a 'cached' state buffer to refer to. 
 		MSlice<b8> row_state_cache;
-		row_state_cache.init_and_allocate(&pl->memory.temp_arena, fb.width, "render pixel fill row state cache buffer");
+		row_state_cache.init_and_allocate(&rm->rm_temp_arena, fb.width, "render pixel fill row state cache buffer");
 
 		int64 prev_y_coord = -MAXINT64;	//Set to -MAXINT64 so that the first cache check will fail and will trigger to fill the cache with first row state. 
 		int64* it = fb.buffer.front;
@@ -210,7 +227,7 @@ void render(PL* pl, AppMemory* gm)
 			}
 		}
 
-		row_state_cache.clear(&pl->memory.temp_arena);
+		row_state_cache.clear(&rm->rm_temp_arena);
 
 #else	//simple previous x coord check . 
 
@@ -220,7 +237,7 @@ void render(PL* pl, AppMemory* gm)
 		{
 			int64 y_coord = *it;
 			it++;	//to get to the x coordinates, it has to jump across the Y coord. 
-			
+
 
 			int64 prev_x_coord = MAXINT64;
 			b8 prev_state;
@@ -239,7 +256,7 @@ void render(PL* pl, AppMemory* gm)
 			for (uint32 x = 0; x < fb.width - 1; x++)	//Processing the rest of the x coord pixels. 
 			{
 				b8 state;
-				if (*it == *(it-1))	//The x coord is same so uses cached state. 
+				if (*it == *(it - 1))	//The x coord is same so uses cached state. 
 				{
 					state = prev_state;
 				}
@@ -257,7 +274,7 @@ void render(PL* pl, AppMemory* gm)
 				ptr++;
 				it++;
 			}
-			
+
 		}
 
 #endif
@@ -359,8 +376,57 @@ void render(PL* pl, AppMemory* gm)
 	draw_bitmap(&main_window, { 0,0 }, &world_bitmap);
 	ATP_END(Draw_Bitmap);
 
-	world_bitmap.clear_mem(&pl->memory.temp_arena);
+	world_bitmap.clear_mem(&rm->rm_temp_arena);
 
+}
+
+void shutdown_renderer(PL* pl, AppMemory* gm)
+{
+	//cleanup render memory 
+	RM* rm = (RM*)gm->render_memory;
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(rm->rm_temp_arena.allocations.front);
+#endif
+
+	destory_window_buffers(rm);
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(rm->rm_arena.allocations.front);
+#endif
+	MARENA_POP(&pl->memory.main_arena, rm->rm_arena.capacity, "Render Memory Arena");
+	MARENA_POP(&pl->memory.main_arena, sizeof(RM), "Render Memory Struct");
+}
+
+void render(PL* pl, AppMemory* gm)
+{
+	RM* rm = (RM*)gm->render_memory;
+	
+	if (pl->window.was_altered)	//Resizing the main window bitmap to the new resolution of the window. 
+	{
+		if (rm->main_window.width != pl->window.width || rm->main_window.height != pl->window.height)
+		{
+			destory_window_buffers(rm);
+
+			rm->main_window.dim = { pl->window.width,pl->window.height };
+			pl->window.window_bitmap.width = rm->main_window.dim.x;
+			pl->window.window_bitmap.height = rm->main_window.dim.y;
+			create_window_buffers(rm);
+			pl->window.window_bitmap.buffer = rm->main_window.mem_buffer;
+			gm->camera_changed = TRUE; //to trigger the renderer to recalculate the worldpos frame buffer
+		}
+	}
+
+	//initializing the temp arena every frame. 
+	rm->rm_temp_arena.capacity = rm->rm_arena.capacity - rm->rm_arena.top;
+	rm->rm_temp_arena.overflow_addon_size = 0;
+	rm->rm_temp_arena.top = 0;
+	rm->rm_temp_arena.base = MARENA_PUSH(&rm->rm_arena, rm->rm_temp_arena.capacity, "Temp Arena");
+
+	update_renderer(pl, gm);
+
+	//resetting/clearing the temp arena at the end of the frame. 
+	MARENA_POP(&rm->rm_arena, rm->rm_temp_arena.capacity, "Temp Arena");
 }
 
 void calculate_worldpos(AppMemory* gm, FrameBuffer& fb)
