@@ -38,39 +38,38 @@ struct AppMemory
 	//double buffer hashtable
 	uint32 table_size;
 
-	Hashtable table1;
-	Hashtable table2;
-
 	Hashtable* active_table;
-	//------------------------
-
-
-	//input handling memory
-	uint64 prev_update_tick;
-	uint64 update_tick_time;
-	b32 cell_removed_from_table;
-	b32 paused;
-	vec2i prev_mouse_pos;
-	b32 in_panning_mode;
 	//------------------------
 
 	
 	b32 update_grid_flag;	//tells the grid processor to iterate over table instead of stack 
 
-	//renderer update flags
+
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
 
 	//------------------------
+	b32 cell_removed_from_table;	//Tells the grid processor that a cell was removed from the hash table. 
 
-	void* render_memory;
 
 	CameraState cm;
 
+	void* grid_processor_memory;
+	void* input_handling_memory;
+	void* render_memory;
+
 };
 
+void init_input_handler(PL* pl, AppMemory* gm);
 void handle_input(PL* pl, AppMemory* gm);
+void shutdown_input_handler(PL* pl, AppMemory* gm);
+
+void init_grid_processor(PL* pl, AppMemory* gm);
 void cellgrid_update_step(PL* pl, AppMemory* gm);
+void shutdown_grid_processor(PL* pl, AppMemory* gm);
+
+void init_renderer(PL* pl, AppMemory* gm);
 void render(PL* pl, AppMemory* gm);
+void shutdown_renderer(PL* pl, AppMemory* gm);
 
 static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 {

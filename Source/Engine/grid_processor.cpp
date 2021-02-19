@@ -2,19 +2,31 @@
 #include "ATProfiler/atp.h"
 
 
-void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_table, MSlice<WorldPos, uint32>& new_cells_tested);
 
-
-void cellgrid_update_step(PL* pl, AppMemory* gm)
+//Grid Processor Memory
+struct GPM
 {
+	MArena gpm_arena;
+	MArena gpm_temp_arena; 
+
+	//A double buffer that stores the hash table and all the live cells. Refer active_table pointer for the 'active table'. 
+	Hashtable table1;
+	Hashtable table2;
+};
+static void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_table, MSlice<WorldPos, uint32>& new_cells_tested);
+
+static void update_cellgrid(PL* pl, AppMemory* gm)
+{
+	GPM* gpm = (GPM*)gm->grid_processor_memory;
+
 	Hashtable* next_table;
-	if (gm->active_table == &gm->table1)
+	if (gm->active_table == &gpm->table1)
 	{
-		next_table = &gm->table2;
+		next_table = &gpm->table2;
 	}
 	else
 	{
-		next_table = &gm->table1;
+		next_table = &gpm->table1;
 	}
 
 	MSlice<WorldPos, uint32> new_cells_tested;	//used to keep track of all the neighbors of lives cells that have been already processed
@@ -53,7 +65,7 @@ void cellgrid_update_step(PL* pl, AppMemory* gm)
 	new_cells_tested.clear(&gm->active_table->arena);
 	gm->active_table->node_list.clear(&gm->active_table->arena);
 	gm->active_table->node_list.front = 0;
-	gm->active_table->node_list.init(&gm->active_table->arena, gm->active_table->node_list.name);
+	gm->active_table->node_list.front = (LiveCellNode*)MARENA_TOP(&gm->active_table->arena);
 
 	//Clearing out previous hashtable (setting to zero to clear it out)
 	pl_buffer_set(gm->active_table->arena.base, 0, gm->active_table->arena.top);
@@ -61,8 +73,98 @@ void cellgrid_update_step(PL* pl, AppMemory* gm)
 	gm->active_table = next_table;
 }
 
+void init_grid_processor(PL* pl, AppMemory* gm)
+{
 
-void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_table, MSlice<WorldPos, uint32>& new_cells_tested)
+	gm->grid_processor_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(GPM), "Grid Processor Memory Struct");
+
+	GPM *gpm = (GPM*)gm->grid_processor_memory;
+
+	gpm->gpm_arena.capacity = Megabytes(25);
+	init_memory_arena(&gpm->gpm_arena, gpm->gpm_arena.capacity, MARENA_PUSH(&pl->memory.main_arena, gpm->gpm_arena.capacity, "Grid Processor Memory Arena"));
+
+	//NOTE: this is a temporary solution.
+#ifdef MONITOR_ARENA_USAGE
+	gpm->gpm_temp_arena.allocations.front = (ArenaOwnerNode*)pl_buffer_alloc(sizeof(ArenaOwnerNode) * ARENAOWNERLIST_CAPACITY);
+#endif
+
+	//hashtable stuff
+	//table size needs to be a power of 2. 
+	gm->table_size = { (2 << 10) };
+
+	//NOTE: THESE HAVE TO BE THE SAME SIZE!
+	gpm->table1.arena.capacity = Megabytes(10);
+	gpm->table2.arena.capacity = gpm->table1.arena.capacity;
+
+
+	init_memory_arena(&gpm->table1.arena, gpm->table1.arena.capacity, MARENA_PUSH(&gpm->gpm_arena, gpm->table1.arena.capacity, "Sub Arena: HashTable-1"));
+	gpm->table1.table_front = (LiveCellNode**)MARENA_PUSH(&gpm->table1.arena, sizeof(LiveCellNode*) * gm->table_size, "HashTable-1 -> table");
+	gpm->table1.node_list.init(&gpm->table1.arena, "HashTable-1 -> live node list");
+
+
+	init_memory_arena(&gpm->table2.arena, gpm->table2.arena.capacity, MARENA_PUSH(&gpm->gpm_arena, gpm->table2.arena.capacity, "Sub Arena: HashTable-2"));
+	gpm->table2.table_front = (LiveCellNode**)MARENA_PUSH(&gpm->table2.arena, sizeof(LiveCellNode*) * gm->table_size, "HashTable-2 -> table");
+	gpm->table2.node_list.init(&gpm->table2.arena, "HashTable-2 -> live node list");
+
+	gm->active_table = &gpm->table1;
+	//---------------
+
+}
+
+void shutdown_grid_processor(PL* pl, AppMemory* gm)
+{
+	GPM* gpm = (GPM*)gm->grid_processor_memory;
+
+
+	gpm->table2.node_list.clear(&gpm->table2.arena);
+	MARENA_POP(&gpm->table2.arena, sizeof(LiveCellNode*) * gm->table_size, "HashTable-2 -> table");
+
+	MARENA_POP(&gpm->gpm_arena, gpm->table2.arena.capacity, "Sub Arena: HashTable-2");
+
+	gpm->table1.node_list.clear(&gpm->table1.arena);
+	MARENA_POP(&gpm->table1.arena, sizeof(LiveCellNode*) * gm->table_size, "HashTable-1 -> table");
+
+	MARENA_POP(&gpm->gpm_arena, gpm->table1.arena.capacity, "Sub Arena: HashTable-1");
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(gpm->table1.arena.allocations.front);
+#endif
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(gpm->table2.arena.allocations.front);
+#endif
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(gpm->gpm_temp_arena.allocations.front);
+#endif
+
+#ifdef MONITOR_ARENA_USAGE
+	pl_buffer_free(gpm->gpm_arena.allocations.front);
+#endif
+
+	MARENA_POP(&pl->memory.main_arena, gpm->gpm_arena.capacity, "Grid Processor Memory Arena");
+	MARENA_POP(&pl->memory.main_arena, sizeof(GPM), "Grid Processor Memory Struct");
+}
+
+void cellgrid_update_step(PL* pl, AppMemory* gm)
+{
+
+	GPM* gpm = (GPM*)gm->grid_processor_memory;
+
+	//initializing/allocating the temp arena with the remaining main arena memory every step. 
+	gpm->gpm_temp_arena.capacity = gpm->gpm_arena.capacity - gpm->gpm_arena.top;
+	gpm->gpm_temp_arena.overflow_addon_size = 0;
+	gpm->gpm_temp_arena.top = 0;
+	gpm->gpm_temp_arena.base = MARENA_PUSH(&gpm->gpm_arena, gpm->gpm_temp_arena.capacity, "Temp Arena");
+
+	update_cellgrid(pl, gm);
+
+	//resetting/clearing the temp arena at the end of the frame. 
+	MARENA_POP(&gpm->gpm_arena, gpm->gpm_temp_arena.capacity, "Temp Arena");
+}
+
+
+static void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_table, MSlice<WorldPos, uint32>& new_cells_tested)
 {
 	WorldPos* pos = &cell->pos;
 	WorldPos lookup_pos[8];
