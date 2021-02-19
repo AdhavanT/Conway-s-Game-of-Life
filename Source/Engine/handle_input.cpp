@@ -6,42 +6,65 @@ inline bool operator==(CameraState& lhs, CameraState& rhs)
 	return res;
 }
 
-void handle_input(PL* pl, AppMemory* gm)
-{
 
-	CameraState prev_cm_state = gm->cm;
+struct IHM
+{
+	//input handling memory
+	uint64 prev_update_tick;
+	uint64 update_tick_time;
+	b32 paused;
+	vec2i prev_mouse_pos;
+	b32 in_panning_mode;
+	//------------------------
+};
+
+void init_input_handler(PL* pl, AppMemory* gm)
+{
+	gm->input_handling_memory = MARENA_PUSH(&pl->memory.main_arena, sizeof(IHM), "Input Handling memory struct");
+
+	IHM* ihm = (IHM*)gm->input_handling_memory;
+
+	ihm->prev_update_tick = pl->time.current_millis;
+	ihm->update_tick_time = 100;
+	ihm->prev_mouse_pos = { 0,0 };
+}
+
+static void update_input_handler(PL* pl, AppMemory* gm)
+{
+	IHM* ihm = (IHM*)gm->input_handling_memory;
+	CameraState prev_cm_state = gm->cm;	//used to check if the camera state was changed. 
 
 	if (pl->input.keys[PL_KEY::SPACE].pressed)
 	{
-		gm->paused = !gm->paused;
+		ihm->paused = !ihm->paused;
 	}
 
 	if (pl->input.mouse.middle.pressed)	//in panning mode
 	{
-		ASSERT(gm->in_panning_mode != TRUE);
-		gm->in_panning_mode = TRUE;
-		gm->prev_mouse_pos = { pl->input.mouse.position_x,pl->input.mouse.position_y };
+		ASSERT(ihm->in_panning_mode != TRUE);
+		ihm->in_panning_mode = TRUE;
+		ihm->prev_mouse_pos = { pl->input.mouse.position_x,pl->input.mouse.position_y };
 	}
 
 	if (pl->input.mouse.middle.released)
 	{
-		gm->in_panning_mode = FALSE;
+		ihm->in_panning_mode = FALSE;
 	}
 
-	if (gm->in_panning_mode)
+	if (ihm->in_panning_mode)
 	{
 		if (!pl->input.mouse.is_in_window)
 		{
-			gm->in_panning_mode = FALSE;
+			ihm->in_panning_mode = FALSE;
 		}
 		else
 		{
-			Vec2<f32> delta_mouse = { (f32)(pl->input.mouse.position_x - gm->prev_mouse_pos.x),(f32)(pl->input.mouse.position_y - gm->prev_mouse_pos.y) };
+			Vec2<f32> delta_mouse = { (f32)(pl->input.mouse.position_x - ihm->prev_mouse_pos.x),(f32)(pl->input.mouse.position_y - ihm->prev_mouse_pos.y) };
 			delta_mouse = delta_mouse * -1;		//inverting so it's 'pull to scroll'
 			delta_mouse *= (f32)gm->cm.scale;	//scaled to world position delta vector (precision loss from f64 to f32 shouldn't matter too much on deltas.)
 			//now adding delta mouse to camera position
 			vec2f delta_sub_world_pos;
-			
+
 			WorldPos delta_world_pos = { (int64)delta_mouse.x, (int64)delta_mouse.y };
 			delta_sub_world_pos = { delta_mouse.x - (int32)delta_world_pos.x,delta_mouse.y - (int32)delta_world_pos.y };
 
@@ -69,8 +92,8 @@ void handle_input(PL* pl, AppMemory* gm)
 			}
 
 
-			gm->prev_mouse_pos.x = pl->input.mouse.position_x;
-			gm->prev_mouse_pos.y = pl->input.mouse.position_y;
+			ihm->prev_mouse_pos.x = pl->input.mouse.position_x;
+			ihm->prev_mouse_pos.y = pl->input.mouse.position_y;
 
 		}
 	}
@@ -97,65 +120,136 @@ void handle_input(PL* pl, AppMemory* gm)
 	}
 
 
-	if (gm->paused)
+	if (ihm->paused)
 	{
-		if (pl->input.mouse.left.pressed)
+		if (pl->input.keys[PL_KEY::LEFT_SHIFT].down)
 		{
-			//Set state of cell.
-
-			WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.window_bitmap.width / 2),(int64)pl->input.mouse.position_y - (pl->window.window_bitmap.height / 2) };
-			screen_coords = screen_to_world(screen_coords, gm->cm);
-
-			uint32 slot = hash_pos(screen_coords, gm->table_size);
-			b32 state = lookup_cell(gm->active_table, slot, screen_coords);
-			//add only if state is false (doesn't exist in table). 
-			if (!state)
+			if (pl->input.mouse.left.down)	//adding cell
 			{
-				pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-				append_new_node(gm->active_table, slot, screen_coords);
+				//Set state of cell.
+
+				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
+				screen_coords = screen_to_world(screen_coords, gm->cm);
+
+				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+				//add only if state is false (doesn't exist in table). 
+				if (!state)
+				{
+					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
+					append_new_node(gm->active_table, slot, screen_coords);
+				}
+			}
+			else if (pl->input.mouse.right.down)	//removing cell
+			{
+				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
+				screen_coords = screen_to_world(screen_coords, gm->cm);
+
+				uint32 slot = hash_pos(screen_coords, gm->table_size);
+
+				LiveCellNode* front = gm->active_table->table_front[slot];
+				if (front == 0)
+				{
+					goto ABORT_MULTI_CELL_REMOVAL;
+				}
+				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
+				{
+					gm->active_table->table_front[slot] = front->next;
+				}
+				else
+				{
+					LiveCellNode* prev = front;
+					LiveCellNode* next = front->next;
+					if (next == 0)
+					{
+						goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist.
+					}
+					else
+					{
+						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
+						{
+							prev = next;
+							next = next->next;
+							if (next == 0)
+							{
+								goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
+							}
+						}
+						prev->next = next->next;
+					}
+
+				}
+				gm->cell_removed_from_table = TRUE;
+			ABORT_MULTI_CELL_REMOVAL:;
 			}
 		}
-		else if (pl->input.mouse.right.pressed)
+		else
 		{
-			WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.window_bitmap.width / 2),(int64)pl->input.mouse.position_y - (pl->window.window_bitmap.height / 2) };
-			screen_coords = screen_to_world(screen_coords, gm->cm);
+			if (pl->input.mouse.left.pressed)	//adding cell
+			{
+				//Set state of cell.
 
-			uint32 slot = hash_pos(screen_coords, gm->table_size);
+				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
+				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-			LiveCellNode* front = gm->active_table->table_front[slot];
-			if (front == 0)
-			{
-				goto ABORT_CELL_REMOVAL;
-			}
-			if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
-			{
-				gm->active_table->table_front[slot] = front->next;
-			}
-			else
-			{
-				LiveCellNode* prev = front;
-				front = front->next;
-				while ((front->pos.x != screen_coords.x && front->pos.y != screen_coords.y))
+				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+				//add only if state is false (doesn't exist in table). 
+				if (!state)
 				{
-					if (front == 0)
+					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
+					append_new_node(gm->active_table, slot, screen_coords);
+				}
+			}
+			else if (pl->input.mouse.right.pressed)	//removing cell
+			{
+				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
+				screen_coords = screen_to_world(screen_coords, gm->cm);
+
+				uint32 slot = hash_pos(screen_coords, gm->table_size);
+
+				LiveCellNode* front = gm->active_table->table_front[slot];
+				if (front == 0)
+				{
+					goto ABORT_CELL_REMOVAL;
+				}
+				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
+				{
+					gm->active_table->table_front[slot] = front->next;
+				}
+				else
+				{
+					LiveCellNode* prev = front;
+					LiveCellNode* next = front->next;
+					if (next == 0)
 					{
 						goto ABORT_CELL_REMOVAL;	//Cell doesn't exist.
 					}
-					prev = front;
-					front = front->next;
+					else
+					{
+						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
+						{
+							prev = next;
+							next = next->next;
+							if (next == 0)
+							{
+								goto ABORT_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
+							}
+						}
+						prev->next = next->next;
+					}
 				}
-				prev->next = front->next;	//removing front from linked list. 
+				gm->cell_removed_from_table = TRUE;
+			ABORT_CELL_REMOVAL:;
 			}
-			gm->cell_removed_from_table = TRUE;
-		ABORT_CELL_REMOVAL:;
 		}
 
 	}
 
-	if (!gm->paused && (pl->time.current_millis >= gm->prev_update_tick + gm->update_tick_time))
+	if (!ihm->paused && (pl->time.current_millis >= ihm->prev_update_tick + ihm->update_tick_time))
 	{
 		//update grid
-		gm->prev_update_tick = pl->time.current_millis;
+		ihm->prev_update_tick = pl->time.current_millis;
 		gm->update_grid_flag = TRUE;
 	}
 
@@ -164,4 +258,14 @@ void handle_input(PL* pl, AppMemory* gm)
 	{
 		gm->camera_changed = TRUE;
 	}
+}
+
+void shutdown_input_handler(PL* pl, AppMemory* gm)
+{
+	MARENA_POP(&pl->memory.main_arena, sizeof(IHM), "Input Handling memory struct");
+}
+
+void handle_input(PL* pl, AppMemory* gm)
+{
+	update_input_handler(pl, gm);
 }

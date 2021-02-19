@@ -38,46 +38,48 @@ struct AppMemory
 	//double buffer hashtable
 	uint32 table_size;
 
-	Hashtable table1;
-	Hashtable table2;
-
 	Hashtable* active_table;
-	//------------------------
-
-
-	//input handling memory
-	uint64 prev_update_tick;
-	uint64 update_tick_time;
-	b32 cell_removed_from_table;
-	b32 paused;
-	vec2i prev_mouse_pos;
-	b32 in_panning_mode;
 	//------------------------
 
 	
 	b32 update_grid_flag;	//tells the grid processor to iterate over table instead of stack 
 
-	//renderer update flags
+
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
 
 	//------------------------
+	b32 cell_removed_from_table;	//Tells the grid processor that a cell was removed from the hash table. 
 
-	void* render_memory;
 
 	CameraState cm;
 
+	void* grid_processor_memory;
+	void* input_handling_memory;
+	void* render_memory;
+
 };
 
+void init_input_handler(PL* pl, AppMemory* gm);
 void handle_input(PL* pl, AppMemory* gm);
+void shutdown_input_handler(PL* pl, AppMemory* gm);
+
+void init_grid_processor(PL* pl, AppMemory* gm);
 void cellgrid_update_step(PL* pl, AppMemory* gm);
+void shutdown_grid_processor(PL* pl, AppMemory* gm);
+
+void init_renderer(PL* pl, AppMemory* gm);
 void render(PL* pl, AppMemory* gm);
+void shutdown_renderer(PL* pl, AppMemory* gm);
 
 static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 {
+	//NOTE: If hash algo is changed, respectively change the wide version used during pixel fill.
+
 	//TODO: proper hash function LOL.
 	uint32 hash = (uint32)(value.x * 16 + value.y * 3) & (table_size - 1);
 	return hash;
 }
+
 
 static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
@@ -93,8 +95,17 @@ static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 	return FALSE;
 }
  
+//---d--
+extern int32 max_hash_depth;
+//---d--
+
 static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
 {
+	//---d--
+	int32 depth = 1;
+	//---d--
+
+
 	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
 	//append to table list
 	LiveCellNode* iterator = ht->table_front[hash_index];
@@ -106,10 +117,18 @@ static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos po
 	{
 		while (iterator->next != 0)
 		{
+			//---d--
+			depth++;
+			//---d--
 			iterator = iterator->next;
 		}
 		iterator->next = new_node;
 	}
+	//---d--
+	if (depth > max_hash_depth)
+		max_hash_depth = depth;
+	//---d--
+
 }
 
 static FORCEDINLINE int64 f64_to_int64(f64 value)
@@ -121,6 +140,19 @@ static FORCEDINLINE int64 f64_to_int64(f64 value)
 	else
 	{
 		value -= 0.5;
+	}
+	return (int64)(value);
+}
+
+static FORCEDINLINE int64 f32_to_int64(f32 value)
+{
+	if (value >= 0.0f)
+	{
+		value += 0.5f;
+	}
+	else
+	{
+		value -= 0.5f;
 	}
 	return (int64)(value);
 }
