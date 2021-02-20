@@ -90,7 +90,7 @@ void init_grid_processor(PL* pl, AppMemory* gm)
 
 	//hashtable stuff
 	//table size needs to be a power of 2. 
-	gm->table_size = { (2 << 10) };
+	gm->table_size = { (2 << 20) };	//2^20 is essentially a hash table thats 4MB big (8MB on x64). 
 
 	//NOTE: THESE HAVE TO BE THE SAME SIZE!
 	gpm->table1.arena.capacity = Megabytes(10);
@@ -237,7 +237,7 @@ static void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_tabl
 			nc_lookup_pos[6] = { new_cell_pos.x - 1, new_cell_pos.y };		//ml
 			nc_lookup_pos[7] = { new_cell_pos.x - 1, new_cell_pos.y + 1 };	//tl
 
-			b32 nc_surround_state[8] = { 2, 2, 2, 2, 2, 2, 2, 2 };	//not pre-assigned
+			b32 nc_surround_state[8] = { 2, 2, 2, 2, 2, 2, 2, 2 };	// 2 means not pre-assigned
 			//preassigning the surrounding state with the already looked up ones. 
 			for (uint32 j = 0; j < ArrayCount(nc_lookup_pos); j++)
 			{
