@@ -11,7 +11,7 @@ int32 max_hash_depth = 0;
 
 void PL_entry_point(PL& pl)
 {
-	init_memory_arena(&pl.memory.main_arena	, Megabytes(200));
+	init_memory_arena(&pl.memory.main_arena	, Megabytes(300));
 
 	init_memory_arena(&pl.memory.temp_arena, Megabytes(50));
 

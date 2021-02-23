@@ -105,8 +105,8 @@ void init_renderer(PL* pl, AppMemory* gm)
 		//initing and creating window with default values.
 		vec2ui dim =
 		{
-			1920,1080
-			//1280,720
+			//1920,1080
+			1280,720
 			//1920, 1079
 			//1919, 1079
 		};
@@ -153,7 +153,6 @@ void update_renderer(PL* pl, AppMemory* gm)
 
 	fill_bitmap(&world_bitmap, { 0.1f,0.1f,0.1f });
 
-	//for first pixel.
 	ATP_START(Draw_Every_Pixel);
 
 	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
@@ -172,10 +171,10 @@ void update_renderer(PL* pl, AppMemory* gm)
 		//If two rows have the same Y coords, they are both exactly the same. So, keeping a 'cached' state buffer to refer to. 
 		MSlice<b8> row_state_cache;
 		row_state_cache.init_and_allocate(&rm->rm_temp_arena, fb.width, "render pixel fill row state cache buffer");
-
-		int64 prev_y_coord = -MAXINT64;	//Set to -MAXINT64 so that the first cache check will fail and will trigger to fill the cache with first row state. 
+		
+		int64 prev_y_coord = -CELL_INVALID_VALUE;	//Set to -MAXINT64 so that the first cache check will fail and will trigger to fill the cache with first row state. 
 		int64* it = fb.buffer.front;
-
+		
 		for (uint32 y = 0; y < fb.height; y++)
 		{
 			int64 y_coord = *it;
@@ -195,7 +194,7 @@ void update_renderer(PL* pl, AppMemory* gm)
 			}
 			else  //Process new row and fill cache.
 			{
-				int64 prev_x_coord = MAXINT64;	//set to maxint64 so first check will fail. 
+				int64 prev_x_coord = CELL_INVALID_VALUE;	//set to maxint64 so first check will fail. 
 				b8 prev_state = 0;
 				for (uint32 x = 0; x < fb.width; x++)
 				{

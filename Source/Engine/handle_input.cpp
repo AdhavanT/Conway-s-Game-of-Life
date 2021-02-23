@@ -137,7 +137,11 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				if (!state)
 				{
 					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
+#if CELL_TABLE_REFACTOR
+					add_new_cell(gm->active_table, slot, screen_coords);
+#else
+		 			append_new_node(gm->active_table, slot, screen_coords);
+#endif
 				}
 			}
 			else if (pl->input.mouse.right.down)	//removing cell
@@ -146,7 +150,10 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
 				uint32 slot = hash_pos(screen_coords, gm->table_size);
-
+#if CELL_TABLE_REFACTOR
+				remove_cell(gm->active_table, slot, screen_coords);
+				
+#else
 				LiveCellNode* front = gm->active_table->table_front[slot];
 				if (front == 0)
 				{
@@ -181,6 +188,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				}
 				gm->cell_removed_from_table = TRUE;
 			ABORT_MULTI_CELL_REMOVAL:;
+#endif
 			}
 		}
 		else
@@ -198,7 +206,12 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				if (!state)
 				{
 					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
+#if CELL_TABLE_REFACTOR
+					add_new_cell(gm->active_table, slot, screen_coords);
+#else
+		 			append_new_node(gm->active_table, slot, screen_coords);
+#endif
+
 				}
 			}
 			else if (pl->input.mouse.right.pressed)	//removing cell
@@ -208,10 +221,13 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 				uint32 slot = hash_pos(screen_coords, gm->table_size);
 
+#if CELL_TABLE_REFACTOR
+				remove_cell(gm->active_table, slot, screen_coords);
+#else
 				LiveCellNode* front = gm->active_table->table_front[slot];
 				if (front == 0)
 				{
-					goto ABORT_CELL_REMOVAL;
+					goto ABORT_SINGLE_CELL_REMOVAL;
 				}
 				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
 				{
@@ -223,7 +239,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 					LiveCellNode* next = front->next;
 					if (next == 0)
 					{
-						goto ABORT_CELL_REMOVAL;	//Cell doesn't exist.
+						goto ABORT_SINGLE_CELL_REMOVAL;	//Cell doesn't exist.
 					}
 					else
 					{
@@ -233,14 +249,16 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 							next = next->next;
 							if (next == 0)
 							{
-								goto ABORT_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
+								goto ABORT_SINGLE_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
 							}
 						}
 						prev->next = next->next;
 					}
+
 				}
 				gm->cell_removed_from_table = TRUE;
-			ABORT_CELL_REMOVAL:;
+			ABORT_SINGLE_CELL_REMOVAL:;
+#endif
 			}
 		}
 
