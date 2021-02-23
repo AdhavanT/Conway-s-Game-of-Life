@@ -17,6 +17,11 @@ static void process_cell(LiveCellNode* cell, AppMemory* gm, Hashtable* next_tabl
 
 static void update_cellgrid(PL* pl, AppMemory* gm)
 {
+	//---d--
+	max_hash_depth = 0;
+	//---d--
+
+
 	GPM* gpm = (GPM*)gm->grid_processor_memory;
 
 	Hashtable* next_table;
