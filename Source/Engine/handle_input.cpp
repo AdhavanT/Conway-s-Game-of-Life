@@ -131,7 +131,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
 				//add only if state is false (doesn't exist in table). 
 				if (!state)
@@ -145,42 +145,9 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 
-				LiveCellNode* front = gm->active_table->table_front[slot];
-				if (front == 0)
-				{
-					goto ABORT_MULTI_CELL_REMOVAL;
-				}
-				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
-				{
-					gm->active_table->table_front[slot] = front->next;
-				}
-				else
-				{
-					LiveCellNode* prev = front;
-					LiveCellNode* next = front->next;
-					if (next == 0)
-					{
-						goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist.
-					}
-					else
-					{
-						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
-						{
-							prev = next;
-							next = next->next;
-							if (next == 0)
-							{
-								goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
-							}
-						}
-						prev->next = next->next;
-					}
-
-				}
-				gm->cell_removed_from_table = TRUE;
-			ABORT_MULTI_CELL_REMOVAL:;
+				remove_cell(gm->active_table, slot, screen_coords);
 			}
 		}
 		else
@@ -192,7 +159,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
 				//add only if state is false (doesn't exist in table). 
 				if (!state)
@@ -206,41 +173,9 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 
-				LiveCellNode* front = gm->active_table->table_front[slot];
-				if (front == 0)
-				{
-					goto ABORT_CELL_REMOVAL;
-				}
-				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
-				{
-					gm->active_table->table_front[slot] = front->next;
-				}
-				else
-				{
-					LiveCellNode* prev = front;
-					LiveCellNode* next = front->next;
-					if (next == 0)
-					{
-						goto ABORT_CELL_REMOVAL;	//Cell doesn't exist.
-					}
-					else
-					{
-						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
-						{
-							prev = next;
-							next = next->next;
-							if (next == 0)
-							{
-								goto ABORT_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
-							}
-						}
-						prev->next = next->next;
-					}
-				}
-				gm->cell_removed_from_table = TRUE;
-			ABORT_CELL_REMOVAL:;
+				remove_cell(gm->active_table, slot, screen_coords);
 			}
 		}
 

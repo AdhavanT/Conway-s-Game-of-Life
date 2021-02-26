@@ -11,9 +11,18 @@ int32 max_hash_depth = 0;
 
 void PL_entry_point(PL& pl)
 {
-	init_memory_arena(&pl.memory.main_arena	, Megabytes(200));
+	pl.memory.main_arena.capacity = Megabytes(200);
+	pl.memory.main_arena.overflow_addon_size = 0;
+	pl.memory.main_arena.top = 0;
+	pl.memory.main_arena.base = pl_arena_buffer_alloc(pl.memory.main_arena.capacity);
+	add_monitoring(&pl.memory.main_arena);
 
-	init_memory_arena(&pl.memory.temp_arena, Megabytes(50));
+
+	pl.memory.temp_arena.capacity = Megabytes(65);
+	pl.memory.temp_arena.overflow_addon_size = 0;
+	pl.memory.temp_arena.top = 0;
+	pl.memory.temp_arena.base = pl_arena_buffer_alloc(pl.memory.temp_arena.capacity);
+	add_monitoring(&pl.memory.temp_arena);
 
 
 	pl.initialized = FALSE;
@@ -52,7 +61,12 @@ void PL_entry_point(PL& pl)
 		PL_push_window(pl.window, TRUE);
 	}
 	shutdown(&pl, &game_memory);
-	cleanup_memory_arena(&pl.memory.main_arena);
+
+	remove_monitoring(&pl.memory.temp_arena);
+	pl_arena_buffer_free(pl.memory.temp_arena.base);
+
+	remove_monitoring(&pl.memory.main_arena);
+	pl_arena_buffer_free(pl.memory.main_arena.base);
 }
 
 static void init(PL* pl, void** game_memory)
@@ -70,8 +84,6 @@ static void init(PL* pl, void** game_memory)
 	gm->cm.world_center = { 0,0 };
 	gm->cm.sub_world_center = { 0,0 };
 	gm->cm.scale = 0.1;
-
-	gm->cell_removed_from_table = FALSE;
 
 	gm->update_grid_flag = TRUE;	//allows the grid processor to initilize with everyone else one frame 1. 
 

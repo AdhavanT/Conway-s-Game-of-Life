@@ -17,9 +17,9 @@ struct NewCellNode
 
 struct Hashtable
 {
-	LiveCellNode** table_front;
-	MArena arena;
+	MSlice<LiveCellNode*> table;
 	MSlice<LiveCellNode> node_list;
+	MArena arena;
 };
 
 struct CameraState
@@ -36,8 +36,6 @@ struct CameraState
 struct AppMemory
 {
 	//double buffer hashtable
-	uint32 table_size;
-
 	Hashtable* active_table;
 	//------------------------
 
@@ -48,8 +46,6 @@ struct AppMemory
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
 
 	//------------------------
-	b32 cell_removed_from_table;	//Tells the grid processor that a cell was removed from the hash table. 
-
 
 	CameraState cm;
 
@@ -80,10 +76,52 @@ static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 	return hash;
 }
 
+#define INVALID_CELL INT64MAX
+
+static inline b32 remove_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* it = ht->table[slot_index];
+	if (it == 0)
+	{
+		return FALSE;
+	}
+	else
+	{
+		if (it->pos.x == pos.x && it->pos.y == pos.y)
+		{
+			ht->table[slot_index] = it->next;
+			return TRUE;
+		}
+		else
+		{
+			LiveCellNode* prev = it;
+			LiveCellNode* next = it->next;
+			if (next == 0)
+			{
+				return FALSE;	//Cell doesn't exist.
+			}
+			else
+			{
+				while ((next->pos.x != pos.x && next->pos.y != pos.y))
+				{
+					prev = next;
+					next = next->next;
+					if (next == 0)
+					{
+						return FALSE;	//Cell doesn't exist. End of list. 
+					}
+				}
+				next->pos.x = INVALID_CELL;
+				prev->next = next->next;
+				return TRUE;
+			}
+		}
+	}
+}
 
 static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
-	LiveCellNode* front = ht->table_front[slot_index];
+	LiveCellNode* front = ht->table[slot_index];
 	while (front != 0)
 	{
 		if (front->pos.x == pos.x && front->pos.y == pos.y)
@@ -108,10 +146,10 @@ static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos po
 
 	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
 	//append to table list
-	LiveCellNode* iterator = ht->table_front[hash_index];
+	LiveCellNode* iterator = ht->table[hash_index];
 	if (iterator == 0)
 	{
-		ht->table_front[hash_index] = new_node;
+		ht->table[hash_index] = new_node;
 	}
 	else
 	{
