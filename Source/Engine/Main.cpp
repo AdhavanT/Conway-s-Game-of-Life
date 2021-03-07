@@ -83,9 +83,7 @@ static void init(PL* pl, void** game_memory)
 	gm->camera_changed = TRUE;	//Triggers the renderer to calculate the worldpos framebuffer
 	gm->cm.world_center = { 0,0 };
 	gm->cm.sub_world_center = { 0,0 };
-	gm->cm.scale = 0.1;
-
-	gm->update_grid_flag = TRUE;	//allows the grid processor to initilize with everyone else one frame 1. 
+	gm->cm.scale = 0.1; 
 
 	//initing the input handler
 	init_input_handler(pl, gm);
@@ -104,7 +102,6 @@ static void init(PL* pl, void** game_memory)
 #include "ATProfiler/atp.h"
 void print_out_tests(PL& pl);
 ATP_REGISTER(main_update_loop); 
-ATP_REGISTER(cellgrid_update);
 
 static void update(PL* pl, void** game_memory)
 {
@@ -112,15 +109,12 @@ static void update(PL* pl, void** game_memory)
 
 	AppMemory* gm = (AppMemory*)*game_memory;
 
+	gm->cellgrid_status = query_cellgrid_update_state(gm);
+
 	handle_input(pl, gm);
 
-	if (gm->update_grid_flag)
-	{
-		ATP_BLOCK(cellgrid_update);
-		cellgrid_update_step(pl,gm);
-		gm->update_grid_flag = FALSE;
-	}
-
+	cellgrid_update_step(pl,gm);
+	
 	render(pl, gm);
 	ATP_END(main_update_loop);
 

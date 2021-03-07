@@ -12,9 +12,15 @@ struct GPM
 	//A double buffer that stores the hash table and all the live cells. Refer active_table pointer for the 'active table'. 
 	Hashtable table1;
 	Hashtable table2;
+
+	b32 trigger_buffer_swap;
+	int32 live_status;	//This value is a CellGridStatus used by the grid processor and can change state throughout the frame (on seperate thread)
+	b32* running;
+
+	ThreadHandle process_thread;
 };
 static void process_cell(WorldPos pos, Hashtable* active_table, Hashtable* next_table, MSlice<WorldPos>& new_cells_tested, MArena* temp_arena);
-static void update_cellgrid(PL* pl, AppMemory* gm)
+static void update_cellgrid(AppMemory* gm)
 {
 	//---d--
 	max_hash_depth = 0;
@@ -36,7 +42,7 @@ static void update_cellgrid(PL* pl, AppMemory* gm)
 	MSlice<WorldPos> new_cells_tested;	//used to keep track of all the neighbors of lives cells that have been already processed
 	new_cells_tested.init(&gpm->gpm_temp_arena, "new cells process queue");
 
-	//Just iterating through node stack instead of table. Avoids going through all empty slots in table. 
+	//Just iterating through node stack instead of table.
 	LiveCellNode* it = gm->active_table->node_list.front;
 	for (uint32 i = 0; i < gm->active_table->node_list.size; i++)
 	{
@@ -46,15 +52,9 @@ static void update_cellgrid(PL* pl, AppMemory* gm)
 
 	//resetting top of the arena to just having the hashtable. 
 	new_cells_tested.clear(&gpm->gpm_temp_arena);
-	gm->active_table->node_list.clear(&gm->active_table->arena);
-	gm->active_table->node_list.front = (LiveCellNode*)MARENA_TOP(&gm->active_table->arena);
-
-	//Clearing out previous hashtable (setting to zero to clear it out)
-	pl_buffer_set(gm->active_table->arena.base, 0, gm->active_table->arena.top);
-	//setting new active table.
-	gm->active_table = next_table;
+	
 }
-
+static void thread_process_cell(void* app_memory);
 void init_grid_processor(PL* pl, AppMemory* gm)
 {
 
@@ -101,13 +101,25 @@ void init_grid_processor(PL* pl, AppMemory* gm)
 
 	gm->active_table = &gpm->table1;
 	//---------------
+	gpm->live_status = (int32)CellGridStatus::FINISHED_PROCESSING;	//Doesn't do anything tell input handler triggers. 
+	gpm->running = &pl->running;
+
+
+	gpm->process_thread = pl_create_thread(thread_process_cell, (void*)gm);
 
 }
 
 void shutdown_grid_processor(PL* pl, AppMemory* gm)
 {
 	GPM* gpm = (GPM*)gm->grid_processor_memory;
+	
+	b32 thread_is_not_done = pl_wait_for_thread(gpm->process_thread, 30000);	//waits for the process thread to finish...waits for 30 seconds. 
+	if (thread_is_not_done)
+	{
+		ERRORBOX("Grid Processing Thread is running for too long after shutdown initiated! Force kill the app...");
+	}
 
+	pl_close_thread(&gpm->process_thread);
 
 	gpm->table2.node_list.clear(&gpm->table2.arena);
 	gpm->table2.table.clear(&gpm->table2.arena);
@@ -131,13 +143,69 @@ void shutdown_grid_processor(PL* pl, AppMemory* gm)
 	MARENA_POP(&pl->memory.main_arena, sizeof(GPM), "Grid Processor Memory Struct");
 }
 
+ATP_REGISTER(process_cell_grid);
+static void thread_process_cell(void* app_memory)
+{
+	AppMemory* gm = (AppMemory*)app_memory;
+	GPM *gpm = (GPM*)gm->grid_processor_memory;
+	while (*gpm->running)
+	{
+		CellGridStatus result = (CellGridStatus)interlocked_compare_exchange_i32(&gpm->live_status, (int32)CellGridStatus::PROCESSING, (int32)CellGridStatus::TRIGGER_PROCESSING);
+		if(result == CellGridStatus::TRIGGER_PROCESSING)
+		{
+			ATP_BLOCK(process_cell_grid);
+			update_cellgrid(gm);
+			CellGridStatus finished_result = (CellGridStatus)interlocked_compare_exchange_i32(&gpm->live_status, (int32)CellGridStatus::FINISHED_PROCESSING, (int32)CellGridStatus::PROCESSING);
+			ASSERT(gpm->trigger_buffer_swap == FALSE);
+			gpm->trigger_buffer_swap = TRUE;
+			ASSERT(finished_result == CellGridStatus::PROCESSING);
+		}
+		else
+		{
+			pl_sleep_thread(1);
+		}
+
+	}
+}
+
+CellGridStatus query_cellgrid_update_state(AppMemory* gm)
+{
+	GPM* gpm = (GPM*)gm->grid_processor_memory;
+	if (gpm->trigger_buffer_swap)
+	{
+		gm->active_table->node_list.clear(&gm->active_table->arena);
+		gm->active_table->node_list.front = (LiveCellNode*)MARENA_TOP(&gm->active_table->arena);
+
+		//Clearing out previous hashtable (setting to zero to clear it out)
+		pl_buffer_set(gm->active_table->table.front, 0, gm->active_table->table.size * sizeof(LiveCellNode*));
+		//setting new active table.
+
+		ASSERT(gpm->live_status == (int32)CellGridStatus::FINISHED_PROCESSING);
+		Hashtable* next_table;
+		if (gm->active_table == &gpm->table1)
+		{
+			next_table = &gpm->table2;
+		}
+		else
+		{
+			next_table = &gpm->table1;
+		}
+		gm->active_table = next_table;
+		gpm->trigger_buffer_swap = FALSE;
+	}
+	CellGridStatus state = (CellGridStatus)gpm->live_status;
+	return state;
+}
+
 void cellgrid_update_step(PL* pl, AppMemory* gm)
 {
-
 	GPM* gpm = (GPM*)gm->grid_processor_memory;
 
-
-	update_cellgrid(pl, gm);
+	if (gm->cellgrid_status == CellGridStatus::TRIGGER_PROCESSING)
+	{
+		ASSERT(gpm->live_status != (int32)CellGridStatus::PROCESSING);	//Triggering processing while already processing!
+		interlocked_exchange_i32(&gpm->live_status, (int32)CellGridStatus::TRIGGER_PROCESSING);
+	}
 }
 
 

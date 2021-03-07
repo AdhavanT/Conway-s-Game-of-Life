@@ -161,7 +161,7 @@ void update_renderer(PL* pl, AppMemory* gm)
 	ATP_START(Draw_Every_Pixel);
 
 	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
-
+	 
 	vec3f on_color = { .5f,.5f,0.0f };
 	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
 

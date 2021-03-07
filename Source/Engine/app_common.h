@@ -33,6 +33,15 @@ struct CameraState
 
 };
 
+//NOTE: This is only possible with C++11. 
+//If compiling in C, make sure this is 4 bytes (to allign with the thread safe, 32 bit interlocked compare and exchange)
+enum CellGridStatus
+{
+	TRIGGER_PROCESSING,
+	PROCESSING,
+	FINISHED_PROCESSING
+};
+
 struct AppMemory
 {
 	//double buffer hashtable
@@ -40,8 +49,7 @@ struct AppMemory
 	//------------------------
 
 	
-	b32 update_grid_flag;	//tells the grid processor to iterate over table instead of stack 
-
+	CellGridStatus cellgrid_status;
 
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
 
@@ -60,6 +68,7 @@ void handle_input(PL* pl, AppMemory* gm);
 void shutdown_input_handler(PL* pl, AppMemory* gm);
 
 void init_grid_processor(PL* pl, AppMemory* gm);
+CellGridStatus query_cellgrid_update_state(AppMemory* gm);
 void cellgrid_update_step(PL* pl, AppMemory* gm);
 void shutdown_grid_processor(PL* pl, AppMemory* gm);
 

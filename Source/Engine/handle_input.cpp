@@ -13,6 +13,7 @@ struct IHM
 	uint64 prev_update_tick;
 	uint64 update_tick_time;
 	b32 paused;
+	b32 trigger_pause;
 	vec2i prev_mouse_pos;
 	b32 in_panning_mode;
 	//------------------------
@@ -24,6 +25,8 @@ void init_input_handler(PL* pl, AppMemory* gm)
 
 	IHM* ihm = (IHM*)gm->input_handling_memory;
 
+	ihm->trigger_pause = FALSE;
+	ihm->paused = TRUE;
 	ihm->prev_update_tick = pl->time.current_millis;
 	ihm->update_tick_time = 100;
 	ihm->prev_mouse_pos = { 0,0 };
@@ -36,17 +39,34 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 	if (pl->input.keys[PL_KEY::SPACE].pressed)
 	{
-		ihm->paused = !ihm->paused;
+		if (gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING)
+		{
+			ihm->paused = !ihm->paused;
+		}
+		else
+		{
+			ASSERT(!ihm->paused);	//It should not be paused unless the cellgrid_status is FINISHED_PROCESSING.
+			ihm->trigger_pause = TRUE;
+		}
 	}
 
-	if (pl->input.mouse.middle.pressed)	//in panning mode
+	if (ihm->trigger_pause)
+	{
+		if (gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING)
+		{
+			ihm->paused = TRUE;
+			ihm->trigger_pause = FALSE;	//releasing trigger
+		}
+	}
+
+	if (pl->input.mouse.middle.pressed || pl->input.keys[PL_KEY::F].pressed)	//in panning mode
 	{
 		ASSERT(ihm->in_panning_mode != TRUE);
 		ihm->in_panning_mode = TRUE;
 		ihm->prev_mouse_pos = { pl->input.mouse.position_x,pl->input.mouse.position_y };
 	}
 
-	if (pl->input.mouse.middle.released)
+	if (pl->input.mouse.middle.released || pl->input.keys[PL_KEY::F].released)
 	{
 		ihm->in_panning_mode = FALSE;
 	}
@@ -181,11 +201,11 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 	}
 
-	if (!ihm->paused && (pl->time.current_millis >= ihm->prev_update_tick + ihm->update_tick_time))
+	if (!ihm->paused && (pl->time.current_millis >= ihm->prev_update_tick + ihm->update_tick_time) &&(gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING))
 	{
 		//update grid
 		ihm->prev_update_tick = pl->time.current_millis;
-		gm->update_grid_flag = TRUE;
+		gm->cellgrid_status = CellGridStatus::TRIGGER_PROCESSING;
 	}
 
 
