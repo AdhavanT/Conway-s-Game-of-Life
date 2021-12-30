@@ -1,9 +1,9 @@
 # Infinity Automata 
 A little infitnite-grid cellular automata engine
-Features:
-  1.Software Renderer
-  2.Threaded grid processing 
-  3.Infinite grid (cells are int64 positions)
+## Features:
+  * Software Renderer
+  * Multi-Threaded grid processing 
+  * Infinite grid 
   
 Note: Currently runs an infinite version of Conway's GOF.
 ![Demo](renderer_new3.gif)
