@@ -19,7 +19,7 @@ struct GPM
 
 	ThreadHandle process_thread;
 };
-static void process_cell(WorldPos pos, Hashtable* active_table, Hashtable* next_table, MSlice<WorldPos>& new_cells_tested, MArena* temp_arena);
+static void process_cell(WorldPos pos,CellType type, Hashtable* active_table, Hashtable* next_table, MSlice<WorldPos>& new_cells_tested, MArena* temp_arena);
 static void update_cellgrid(AppMemory* gm)
 {
 	//---d--
@@ -46,7 +46,7 @@ static void update_cellgrid(AppMemory* gm)
 	LiveCellNode* it = gm->active_table->node_list.front;
 	for (uint32 i = 0; i < gm->active_table->node_list.size; i++)
 	{
-		process_cell(it->pos, gm->active_table, next_table, new_cells_tested, &gpm->gpm_temp_arena);
+		process_cell(it->pos,it->type, gm->active_table, next_table, new_cells_tested, &gpm->gpm_temp_arena);
 		it++;
 	}
 
@@ -209,9 +209,9 @@ void cellgrid_update_step(PL* pl, AppMemory* gm)
 }
 
 
-static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next_table, MSlice<WorldPos>& new_cells_tested, MArena* temp_arena)
+static void process_cell(WorldPos pos,CellType type,  Hashtable* active_table, Hashtable* next_table, MSlice<WorldPos>& new_cells_tested, MArena* temp_arena)
 {
-	if (pos.x == INVALID_CELL)
+	if (type == CellType::EMPTY)
 	{
 		return;
 	}
@@ -239,7 +239,7 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 	lookup_pos_hash[6] = hash_pos(lookup_pos[6], table_size);
 	lookup_pos_hash[7] = hash_pos(lookup_pos[7], table_size);
 
-	b32 surround_state[8] = {};
+	CellType surround_state[8] = {};
 
 	uint32 active_around = 0;
 	for (uint32 i = 0; i < ArrayCount(lookup_pos); i++)
@@ -253,7 +253,7 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 	{
 		//Cell survives! Adding to next hashmap. 
 		uint32 slot = hash_pos(pos, table_size);
-		append_new_node(next_table, slot, pos);
+		append_new_node(next_table, slot, pos, CellType::CONWAY_LIVE);
 	}
 	//else cell doesn't survive to next state. 
 
@@ -288,7 +288,9 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 			nc_lookup_pos[6] = { new_cell_pos.x - 1, new_cell_pos.y };		//ml
 			nc_lookup_pos[7] = { new_cell_pos.x - 1, new_cell_pos.y + 1 };	//tl
 
-			b32 nc_surround_state[8] = { 2, 2, 2, 2, 2, 2, 2, 2 };	// 2 means not pre-assigned
+			CellType nc_surround_state[8] = { (CellType)UINT32MAX, (CellType)UINT32MAX, (CellType)UINT32MAX, 
+											  (CellType)UINT32MAX,						(CellType)UINT32MAX, 
+											   (CellType)UINT32MAX,(CellType)UINT32MAX, (CellType)UINT32MAX };	// UINT32MAX means not pre-assigned
 			//preassigning the surrounding state with the already looked up ones. 
 			for (uint32 j = 0; j < ArrayCount(nc_lookup_pos); j++)
 			{
@@ -304,7 +306,7 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 			//performing lookups on the neighboring cells that aren't near the nearby live cell. 
 			for (uint32 j = 0; j < ArrayCount(nc_lookup_pos); j++)
 			{
-				if (nc_surround_state[j] != 2)	//found by the previous lookup 
+				if ((uint32)nc_surround_state[j] != UINT32MAX)	//found by the previous lookup 
 				{
 					continue;
 				}
@@ -320,8 +322,8 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 			uint32 nc_active_count = 0;
 			for (uint32 j = 0; j < ArrayCount(nc_surround_state); j++)
 			{
-				nc_active_count += nc_surround_state[j];
-				ASSERT(nc_surround_state[j] == 0 || nc_surround_state[j] == 1);
+				nc_active_count += (nc_surround_state[j] == CellType::CONWAY_LIVE) ? 1 : 0;
+				//ASSERT(nc_surround_state[j] == 0 || nc_surround_state[j] == 1);
 			}
 
 			if (nc_active_count == 3)	//cell becomes alive!
@@ -329,7 +331,7 @@ static void process_cell(WorldPos pos,  Hashtable* active_table, Hashtable* next
 				//adding cell to next hashmap
 				uint32 nc_new_cell_hash = hash_pos(new_cell_pos, table_size);
 				uint32 nc_new_cell_index = nc_new_cell_hash;
-				append_new_node(next_table, nc_new_cell_index, new_cell_pos);
+				append_new_node(next_table, nc_new_cell_index, new_cell_pos, CellType::CONWAY_LIVE);
 			}
 		}
 	SKIP_TEST:;

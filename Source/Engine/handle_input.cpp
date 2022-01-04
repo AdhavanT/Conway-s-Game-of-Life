@@ -16,6 +16,7 @@ struct IHM
 	b32 trigger_pause;
 	vec2i prev_mouse_pos;
 	b32 in_panning_mode;
+	CellType paint_mode;
 	//------------------------
 };
 
@@ -142,6 +143,27 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 	if (ihm->paused)
 	{
+		pl_debug_print("Active paint brush: %i\n", (int32)ihm->paint_mode);
+		if (pl->input.keys[PL_KEY::NUM_0].down)
+		{
+			ihm->paint_mode = (CellType)0;
+		}
+
+		if (pl->input.keys[PL_KEY::NUM_1].down)
+		{
+			ihm->paint_mode = (CellType)1;
+		}
+
+		if (pl->input.keys[PL_KEY::NUM_2].down)
+		{
+			ihm->paint_mode = (CellType)2;
+		}
+
+		if (pl->input.keys[PL_KEY::NUM_3].down)
+		{
+			ihm->paint_mode = (CellType)3;
+		}
+
 		if (pl->input.keys[PL_KEY::LEFT_SHIFT].down)
 		{
 			if (pl->input.mouse.left.down)	//adding cell
@@ -152,12 +174,19 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
 				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
-				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+				LiveCellNode* cell = get_cell(gm->active_table, slot, screen_coords);
 				//add only if state is false (doesn't exist in table). 
-				if (!state)
+				if (cell == NULL)
 				{
-					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
+					if (ihm->paint_mode != CellType::EMPTY)
+					{
+						append_new_node(gm->active_table, slot, screen_coords, ihm->paint_mode);
+						//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
+					}
+				}
+				else if (cell->type != ihm->paint_mode)
+				{
+					cell->type = ihm->paint_mode;
 				}
 			}
 			else if (pl->input.mouse.right.down)	//removing cell
@@ -167,7 +196,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 
-				remove_cell(gm->active_table, slot, screen_coords);
+				purge_cell(gm->active_table, slot, screen_coords);
 			}
 		}
 		else
@@ -180,12 +209,18 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
 				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
-				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+				LiveCellNode* cell = get_cell(gm->active_table, slot, screen_coords);
 				//add only if state is false (doesn't exist in table). 
-				if (!state)
+				if (cell == NULL)
 				{
-					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
+					if (ihm->paint_mode != CellType::EMPTY)
+					{
+						append_new_node(gm->active_table, slot, screen_coords, ihm->paint_mode);
+					}
+				}
+				else if (cell->type != ihm->paint_mode)
+				{
+					cell->type = ihm->paint_mode;
 				}
 			}
 			else if (pl->input.mouse.right.pressed)	//removing cell
@@ -195,7 +230,7 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 
-				remove_cell(gm->active_table, slot, screen_coords);
+				purge_cell(gm->active_table, slot, screen_coords);
 			}
 		}
 

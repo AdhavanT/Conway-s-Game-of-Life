@@ -3,16 +3,19 @@
 
 typedef Vec2<int64> WorldPos;
 
+enum CellType
+{
+	EMPTY = 0,
+	CONWAY_LIVE,
+	SAND,
+	BRICK
+};
+
 struct LiveCellNode
 {
 	WorldPos pos;
+	CellType type;
 	LiveCellNode* next;
-};
-
-struct NewCellNode
-{
-	WorldPos pos;
-	NewCellNode* next;
 };
 
 struct Hashtable
@@ -87,7 +90,7 @@ static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 
 #define INVALID_CELL INT64MAX
 
-static inline b32 remove_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+static inline b32 purge_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
 	LiveCellNode* it = ht->table[slot_index];
 	if (it == 0)
@@ -98,6 +101,7 @@ static inline b32 remove_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 	{
 		if (it->pos.x == pos.x && it->pos.y == pos.y)
 		{
+			it->type = CellType::EMPTY;
 			ht->table[slot_index] = it->next;
 			return TRUE;
 		}
@@ -120,7 +124,7 @@ static inline b32 remove_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 						return FALSE;	//Cell doesn't exist. End of list. 
 					}
 				}
-				next->pos.x = INVALID_CELL;
+				next->type = CellType::EMPTY;
 				prev->next = next->next;
 				return TRUE;
 			}
@@ -128,32 +132,46 @@ static inline b32 remove_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 	}
 }
 
-static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+static inline CellType lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
 	LiveCellNode* front = ht->table[slot_index];
 	while (front != 0)
 	{
 		if (front->pos.x == pos.x && front->pos.y == pos.y)
 		{
-			return TRUE;
+			return front->type;
 		}
 		front = front->next;
 	}
-	return FALSE;
+	return CellType::EMPTY;
 }
  
+static inline LiveCellNode* get_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* front = ht->table[slot_index];
+	while (front != 0)
+	{
+		if (front->pos.x == pos.x && front->pos.y == pos.y)
+		{
+			return front;
+		}
+		front = front->next;
+	}
+	return NULL;
+}
+
 //---d--
 extern int32 max_hash_depth;
 //---d--
 
-static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
+static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos, CellType type)
 {
 	//---d--
 	int32 depth = 1;
 	//---d--
 
 
-	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
+	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, type,0 });
 	//append to table list
 	LiveCellNode* iterator = ht->table[hash_index];
 	if (iterator == 0)

@@ -41,6 +41,14 @@ struct Bitmap
 	};
 
 
+vec3f cell_color[] =
+{
+	{0.1f,0.1f,0.1f},   //EMPTY
+	{ .2f,.5f,0.6f },	//CONWAY_LIVE
+	{ .65f,.5f,0.0f },  //SAND
+	{ .7f, .2f,.2f}		//BRICK
+};
+
 //Renderer memory.
 struct RM	
 {
@@ -48,6 +56,8 @@ struct RM
 	MArena rm_temp_arena;
 	FrameBuffer worldpos_fb;
 	Bitmap main_window;
+	
+	uint32 cell_color_c[ArrayCount(cell_color)];
 };
 
 
@@ -105,8 +115,8 @@ void init_renderer(PL* pl, AppMemory* gm)
 		//initing and creating window with default values.
 		vec2ui dim =
 		{
-			1920,1080
-			//1280,720
+			//1920,1080
+			1280,720
 			//1920, 1079
 			//1919, 1079
 		};
@@ -124,6 +134,11 @@ void init_renderer(PL* pl, AppMemory* gm)
 
 		PL_initialize_window(pl->window, &pl->memory.main_arena);
 
+
+		for (int i = 0; i < ArrayCount(cell_color); i++)
+		{
+			rm->cell_color_c[i] = (uint32)(cell_color[i].r * 255.0f) << 16 | (uint32)(cell_color[i].g * 255.0f) << 8 | (uint32)(cell_color[i].b * 255.0f) << 0;
+		}
 }
 
 
@@ -162,9 +177,7 @@ void update_renderer(PL* pl, AppMemory* gm)
 
 	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
 	 
-	vec3f on_color = { .5f,.5f,0.0f };
-	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
-
+	
 
 	if (gm->cm.scale < 0.9)
 	{
@@ -173,7 +186,7 @@ void update_renderer(PL* pl, AppMemory* gm)
 		//NOTE: Using a Y row cache buffer to refer to. This is much slower in debug mode than doing a simple previous pixel check, but WAY faster in O2 mode. 
 		//NOTE: Whats going on here:
 		//If two rows have the same Y coords, they are both exactly the same. So, keeping a 'cached' state buffer to refer to. 
-		MSlice<b8> row_state_cache;
+		MSlice<CellType> row_state_cache;
 		row_state_cache.init_and_allocate(&rm->rm_temp_arena, fb.width, "render pixel fill row state cache buffer");
 
 		int64 prev_y_coord = -MAXINT64;	//Set to -MAXINT64 so that the first cache check will fail and will trigger to fill the cache with first row state. 
@@ -187,11 +200,10 @@ void update_renderer(PL* pl, AppMemory* gm)
 			{
 				for (uint32 x = 0; x < fb.width; x++)
 				{
-					b8 state = row_state_cache[x];
-					if (state)
-					{
-						*ptr = casted_on_color;
-					}
+					CellType state = row_state_cache[x];
+					
+					*ptr = rm->cell_color_c[(uint32)state];
+
 					ptr++;
 					it++;
 				}
@@ -199,10 +211,10 @@ void update_renderer(PL* pl, AppMemory* gm)
 			else  //Process new row and fill cache.
 			{
 				int64 prev_x_coord = MAXINT64;	//set to maxint64 so first check will fail. 
-				b8 prev_state = 0;
+				CellType prev_state = CellType::EMPTY;
 				for (uint32 x = 0; x < fb.width; x++)
 				{
-					b8 state;
+					CellType state;
 					if (*it == prev_x_coord)
 					{
 						state = prev_state;
@@ -212,17 +224,14 @@ void update_renderer(PL* pl, AppMemory* gm)
 						WorldPos pos = { *it, y_coord };
 
 						uint32 slot = hash_pos(pos, gm->active_table->table.size);
-						state = (b8)lookup_cell(gm->active_table, slot, pos);
+						state = lookup_cell(gm->active_table, slot, pos);
 
 						prev_x_coord = *it;
 						prev_state = state;
 					}
 					row_state_cache[x] = state;
 
-					if (state)
-					{
-						*ptr = casted_on_color;
-					}
+					*ptr = rm->cell_color_c[(uint32)state];
 					ptr++;
 					it++;
 				}
@@ -250,14 +259,11 @@ void update_renderer(PL* pl, AppMemory* gm)
 			{
 				WorldPos pos = { *it, y_coord };
 
-				b32 state;
+				CellType state;
 				uint32 slot = hash_pos(pos, gm->active_table->table.size);
 				state = lookup_cell(gm->active_table, slot, pos);
 
-				if (state)
-				{
-					*ptr = casted_on_color;
-				}
+				*ptr = rm->cell_color_c[(uint32)state];
 				ptr++;
 				it++;
 
