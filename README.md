@@ -5,6 +5,6 @@ A little infitnite-grid cellular automata engine
   * Multi-Threaded grid processing 
   * Infinite grid 
   
-Note: Currently runs an infinite version of Conway's GOF.
+Note: Currently runs a version of Conway's GOF.
 ![Demo](renderer_new3.gif)
 
