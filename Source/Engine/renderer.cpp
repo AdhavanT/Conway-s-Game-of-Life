@@ -35,13 +35,19 @@ struct Bitmap
 	{
 #ifdef SIMD_128
 		MSlice<int64> buffer;	//NOTE: buffer is organized so that first element of each row is the Y axis coordinate and the rest of the row is just the respective X coordinate.  
-#else
-		MSlice<WorldPos> buffer;
 #endif
 		uint32 width;
 		uint32 height;
 	};
 
+
+vec3f cell_color[] =
+{
+	{0.1f,0.1f,0.1f},   //EMPTY
+	{ .65f,.5f,0.0f },  //SAND
+	{ .2f,.5f,0.6f },	//CONWAY_LIVE
+	{ .7f, .2f,.2f}		//BRICK
+};
 
 //Renderer memory.
 struct RM	
@@ -50,6 +56,8 @@ struct RM
 	MArena rm_temp_arena;
 	FrameBuffer worldpos_fb;
 	Bitmap main_window;
+	
+	uint32 cell_color_c[ArrayCount(cell_color)];
 };
 
 
@@ -73,10 +81,7 @@ static void create_window_buffers(RM* rm)
 	rm->worldpos_fb.height = (int32)rm->main_window.height;
 #ifdef SIMD_128
 	//NOTE: Size to store is the total number of X coordinates = height * width and total number of distinct Y coordinates = height. ( the first element of each row is the y coordinate for the entire row.)
-	//NOTE: in SIMD mode, we're storing the values as int64s instead of worldposs. This uses less space than scalar.
 	rm->worldpos_fb.buffer.init_and_allocate(&rm->rm_arena, (rm->worldpos_fb.height * rm->worldpos_fb.width) + rm->worldpos_fb.height, "Frame Buffer with WorldPos");
-#else
-	rm->worldpos_fb.buffer.init_and_allocate(&rm->rm_arena, rm->worldpos_fb.height * rm->worldpos_fb.width, "Frame Buffer with WorldPos");
 #endif
 
 }
@@ -95,18 +100,23 @@ void init_renderer(PL* pl, AppMemory* gm)
 		RM* rm = (RM*)gm->render_memory;
 
 		rm->rm_arena.capacity = Megabytes(100);
-		init_memory_arena(&rm->rm_arena, rm->rm_arena.capacity, MARENA_PUSH(&pl->memory.main_arena, rm->rm_arena.capacity, "Render Memory Arena"));
+		rm->rm_arena.overflow_addon_size = 0;
+		rm->rm_arena.top = 0;
+		rm->rm_arena.base = MARENA_PUSH(&pl->memory.main_arena, rm->rm_arena.capacity, "Render Memory Arena");
+		add_monitoring(&rm->rm_arena);
 		
-		//NOTE: this is a temporary solution.
-		#ifdef MONITOR_ARENA_USAGE
-				rm->rm_temp_arena.allocations.front = (ArenaOwnerNode*)pl_buffer_alloc(sizeof(ArenaOwnerNode) * ARENAOWNERLIST_CAPACITY);
-		#endif
+		rm->rm_temp_arena.capacity = Megabytes(50);
+		rm->rm_temp_arena.overflow_addon_size = 0;
+		rm->rm_temp_arena.top = 0;
+		rm->rm_temp_arena.base = MARENA_PUSH(&pl->memory.temp_arena, rm->rm_temp_arena.capacity, "Render Temp Arena");
+		add_monitoring(&rm->rm_temp_arena);
+		
 
 		//initing and creating window with default values.
 		vec2ui dim =
 		{
-			1920,1080
-			//1280,720
+			//1920,1080
+			1280,720
 			//1920, 1079
 			//1919, 1079
 		};
@@ -124,7 +134,14 @@ void init_renderer(PL* pl, AppMemory* gm)
 
 		PL_initialize_window(pl->window, &pl->memory.main_arena);
 
+
+		for (int i = 0; i < ArrayCount(cell_color); i++)
+		{
+			rm->cell_color_c[i] = (uint32)(cell_color[i].r * 255.0f) << 16 | (uint32)(cell_color[i].g * 255.0f) << 8 | (uint32)(cell_color[i].b * 255.0f) << 0;
+		}
 }
+
+
 
 void update_renderer(PL* pl, AppMemory* gm)
 {
@@ -133,6 +150,8 @@ void update_renderer(PL* pl, AppMemory* gm)
 
 	Bitmap& main_window = rm->main_window;
 	FrameBuffer& fb = rm->worldpos_fb;
+
+
 
 	pl_debug_print("Resolution: [%i, %i]\n", rm->main_window.width, rm->main_window.height);
 
@@ -157,20 +176,17 @@ void update_renderer(PL* pl, AppMemory* gm)
 	ATP_START(Draw_Every_Pixel);
 
 	uint32* ptr = (uint32*)world_bitmap.mem_buffer;
-
-	vec3f on_color = { .5f,.5f,0.0f };
-	uint32 casted_on_color = (uint32)(on_color.r * 255.0f) << 16 | (uint32)(on_color.g * 255.0f) << 8 | (uint32)(on_color.b * 255.0f) << 0;
-
+	 
+	
 
 	if (gm->cm.scale < 0.9)
 	{
 #ifdef SIMD_128
 
-#if 1	//NOTE: Using a Y row cache buffer to refer to. This is much slower in debug mode than doing a simple previous pixel check, but WAY faster in O2 mode. 
-
+		//NOTE: Using a Y row cache buffer to refer to. This is much slower in debug mode than doing a simple previous pixel check, but WAY faster in O2 mode. 
 		//NOTE: Whats going on here:
 		//If two rows have the same Y coords, they are both exactly the same. So, keeping a 'cached' state buffer to refer to. 
-		MSlice<b8> row_state_cache;
+		MSlice<CellType> row_state_cache;
 		row_state_cache.init_and_allocate(&rm->rm_temp_arena, fb.width, "render pixel fill row state cache buffer");
 
 		int64 prev_y_coord = -MAXINT64;	//Set to -MAXINT64 so that the first cache check will fail and will trigger to fill the cache with first row state. 
@@ -184,11 +200,10 @@ void update_renderer(PL* pl, AppMemory* gm)
 			{
 				for (uint32 x = 0; x < fb.width; x++)
 				{
-					b8 state = row_state_cache[x];
-					if (state)
-					{
-						*ptr = casted_on_color;
-					}
+					CellType state = row_state_cache[x];
+					
+					*ptr = rm->cell_color_c[(uint32)state];
+
 					ptr++;
 					it++;
 				}
@@ -196,10 +211,10 @@ void update_renderer(PL* pl, AppMemory* gm)
 			else  //Process new row and fill cache.
 			{
 				int64 prev_x_coord = MAXINT64;	//set to maxint64 so first check will fail. 
-				b8 prev_state = 0;
+				CellType prev_state = CellType::EMPTY;
 				for (uint32 x = 0; x < fb.width; x++)
 				{
-					b8 state;
+					CellType state;
 					if (*it == prev_x_coord)
 					{
 						state = prev_state;
@@ -208,18 +223,15 @@ void update_renderer(PL* pl, AppMemory* gm)
 					{
 						WorldPos pos = { *it, y_coord };
 
-						uint32 slot = hash_pos(pos, gm->table_size);
-						state = (b8)lookup_cell(gm->active_table, slot, pos);
+						uint32 slot = hash_pos(pos, gm->active_table->table.size);
+						state = lookup_cell(gm->active_table, slot, pos);
 
 						prev_x_coord = *it;
 						prev_state = state;
 					}
 					row_state_cache[x] = state;
 
-					if (state)
-					{
-						*ptr = casted_on_color;
-					}
+					*ptr = rm->cell_color_c[(uint32)state];
 					ptr++;
 					it++;
 				}
@@ -228,96 +240,6 @@ void update_renderer(PL* pl, AppMemory* gm)
 		}
 
 		row_state_cache.clear(&rm->rm_temp_arena);
-
-#else	//simple previous x coord check . 
-
-		int64* it = fb.buffer.front;
-
-		for (uint32 y = 0; y < fb.height; y++)
-		{
-			int64 y_coord = *it;
-			it++;	//to get to the x coordinates, it has to jump across the Y coord. 
-
-
-			int64 prev_x_coord = MAXINT64;
-			b8 prev_state;
-
-			//----This part processes the first pixel for the y row so that the next pixel can refer to it. 
-			WorldPos pos = { *it, y_coord };
-			uint32 slot = hash_pos(pos, gm->table_size);
-			prev_state = lookup_cell(gm->active_table, slot, pos);
-			if (prev_state)
-			{
-				*ptr = casted_on_color;
-			}
-			ptr++;
-			it++;
-			//------
-			for (uint32 x = 0; x < fb.width - 1; x++)	//Processing the rest of the x coord pixels. 
-			{
-				b8 state;
-				if (*it == *(it - 1))	//The x coord is same so uses cached state. 
-				{
-					state = prev_state;
-				}
-				else   //Different x coord so recalculating state and caching it. 
-				{
-					pos.x = *it;
-					uint32 slot = hash_pos(pos, gm->table_size);
-					prev_state = lookup_cell(gm->active_table, slot, pos);
-					state = prev_state;
-				}
-				if (state)
-				{
-					*ptr = casted_on_color;
-				}
-				ptr++;
-				it++;
-			}
-
-		}
-
-#endif
-
-#else	//Scalar Pixel fill
-		WorldPos* next = fb.buffer.front;
-
-		b32 prev_state = { 1 };
-		uint32 slot = hash_pos(*next, gm->table_size);
-		prev_state = lookup_cell(gm->active_table, slot, *next);
-		if (prev_state)
-		{
-			//set pixel to yellow (on)
-			*ptr = casted_on_color;
-		}
-		ptr++;
-		next++;
-		for (uint32 i = 0; i < (fb.height * fb.width - 1); i++)	//filling the rest of them.
-		{
-
-			b32 state;
-
-
-			//if (*(next-1) == *(next))//	NOTE: For some reason, doing this takes WAY longer (like 15ms for 720p)...even in O2, compiler couldn't make them the same...interesting..
-			if ((next->x == (next - 1)->x && next->y == (next - 1)->y))
-			{
-				state = prev_state;
-			}
-			else
-			{
-				uint32 slot = hash_pos(*next, gm->table_size);
-				state = lookup_cell(gm->active_table, slot, *next);
-				prev_state = state;
-			}
-			if (state)
-			{
-				//set pixel to yellow (on)
-				*ptr = casted_on_color;
-			}
-			ptr++;
-			next++;
-
-		}
 #endif
 	}
 	else   //Zoomed out so not worth doing the caching of state (since each x and y pixel coordinate maps to a distinctive world coordinate. 
@@ -337,37 +259,17 @@ void update_renderer(PL* pl, AppMemory* gm)
 			{
 				WorldPos pos = { *it, y_coord };
 
-				b32 state;
-				uint32 slot = hash_pos(pos, gm->table_size);
+				CellType state;
+				uint32 slot = hash_pos(pos, gm->active_table->table.size);
 				state = lookup_cell(gm->active_table, slot, pos);
 
-				if (state)
-				{
-					*ptr = casted_on_color;
-				}
+				*ptr = rm->cell_color_c[(uint32)state];
 				ptr++;
 				it++;
 
 			}
 		}
-
-#else	//Scalar version
-		WorldPos* it = fb.buffer.front;
-		for (uint32 i = 0; i < (fb.height * fb.width - 1); i++)
-		{
-			b32 state;
-			uint32 slot = hash_pos(*it, gm->table_size);
-			state = lookup_cell(gm->active_table, slot, *it);
-
-			if (state)
-			{
-				*ptr = casted_on_color;
-			}
-			ptr++;
-			it++;
-		}
 #endif
-
 	}
 
 	ATP_END(Draw_Every_Pixel);
@@ -384,16 +286,12 @@ void shutdown_renderer(PL* pl, AppMemory* gm)
 {
 	//cleanup render memory 
 	RM* rm = (RM*)gm->render_memory;
-
-#ifdef MONITOR_ARENA_USAGE
-	pl_buffer_free(rm->rm_temp_arena.allocations.front);
-#endif
+	MARENA_POP(&pl->memory.temp_arena, rm->rm_temp_arena.capacity, "Render Temp Arena");
+	remove_monitoring(&rm->rm_temp_arena);
 
 	destory_window_buffers(rm);
 
-#ifdef MONITOR_ARENA_USAGE
-	pl_buffer_free(rm->rm_arena.allocations.front);
-#endif
+	remove_monitoring(&rm->rm_arena);
 	MARENA_POP(&pl->memory.main_arena, rm->rm_arena.capacity, "Render Memory Arena");
 	MARENA_POP(&pl->memory.main_arena, sizeof(RM), "Render Memory Struct");
 }
@@ -417,16 +315,7 @@ void render(PL* pl, AppMemory* gm)
 		}
 	}
 
-	//initializing the temp arena every frame. 
-	rm->rm_temp_arena.capacity = rm->rm_arena.capacity - rm->rm_arena.top;
-	rm->rm_temp_arena.overflow_addon_size = 0;
-	rm->rm_temp_arena.top = 0;
-	rm->rm_temp_arena.base = MARENA_PUSH(&rm->rm_arena, rm->rm_temp_arena.capacity, "Temp Arena");
-
 	update_renderer(pl, gm);
-
-	//resetting/clearing the temp arena at the end of the frame. 
-	MARENA_POP(&rm->rm_arena, rm->rm_temp_arena.capacity, "Temp Arena");
 }
 
 void calculate_worldpos(AppMemory* gm, FrameBuffer& fb)
@@ -506,7 +395,7 @@ void calculate_worldpos(AppMemory* gm, FrameBuffer& fb)
 			__m128 orred_result_4x = _mm_or_ps(x_below_zero_4x, x_above_zero_4x);
 			__m128i int_result = _mm_cvttps_epi32(orred_result_4x);
 			*/
-			//NOTE: This is ridiculous. Below is one instruction that rounds to nearest before cast to int....instead of the above. Ughhh...Why didn't I realize this sooner!!
+			//NOTE: This is ridiculous. Below is one instruction that rounds to nearest before cast to int....instead of the above.
 			__m128i int_result = _mm_cvtps_epi32(x_screen_coord_4x);
 			//turning those 4 int32s into 2 int64s. 
 			__m128i first_two_results = _mm_cvtepi32_epi64(int_result);
@@ -542,38 +431,6 @@ void calculate_worldpos(AppMemory* gm, FrameBuffer& fb)
 	}
 	ASSERT((int64*)iterator == (fb.buffer.front + fb.buffer.size));
 
-#else	//scalar flat version
-	f32 x_start = (f32)(-(int32)(fb.width / 2));
-	f32 x_end = (fb.width % 2 == 0) ? ((-x_start) - 1.0f) : -x_start;
-
-	f32 y_start = (f32)(-(int32)(fb.height / 2));
-	f32 y_end = (fb.height % 2 == 0) ? ((-y_start) - 1.0f) : -y_start;
-
-	x_end++;
-	y_end++;
-	f32 fscale = (f32)gm->cm.scale;
-
-	WorldPos* iterator = fb.buffer.front;
-	for (f32 y = y_start; y < y_end; y++)
-	{
-
-		f32 y_coord = y * fscale;
-		y_coord += gm->cm.sub_world_center.y;
-		int64 y_coord_fin = f32_to_int64(y_coord);
-		y_coord_fin += gm->cm.world_center.y;
-
-		for (f32 x = x_start; x < x_end; x++)
-		{
-			f32 x_coord = x * fscale;
-			x_coord += gm->cm.sub_world_center.x;
-			int64 x_coord_fin = f32_to_int64(x_coord);
-			x_coord_fin += gm->cm.world_center.x;
-			*iterator = { x_coord_fin, y_coord_fin };
-			iterator++;
-		}
-	}
-	ASSERT(iterator == (fb.buffer.front + fb.buffer.size));
-
 #endif
 }
 
@@ -606,16 +463,7 @@ void fill_bitmap(Bitmap* dest, vec3f color)
 	}
 	ASSERT(ptr_single == ((uint32*)dest->mem_buffer + dest->height * dest->width));
 
-#else	//Scalar Version
-	uint32 size = dest->height * dest->width;
-	uint32* ptr = (uint32*)dest->mem_buffer;
-	uint32 casted_color = (uint32)(color.r * 255.0f) << 16 | (uint32)(color.g * 255.0f) << 8 | (uint32)(color.b * 255.0f) << 0;
 
-	for (uint32 x = 0; x < size; x++)
-	{
-		*ptr = casted_color;
-		ptr++;
-	}
 #endif
 }
 
@@ -675,26 +523,7 @@ void draw_bitmap(Bitmap* dest, vec2ui bottom_left, Bitmap* bitmap)
 		}
 		dest_ptr += end_shift;
 	}
-#else	//Scalar version. 
-	uint32* dest_ptr = (uint32*)dest->mem_buffer + (bottom_left.y * dest->width) + bottom_left.x;
-	uint32* source_ptr = (uint32*)bitmap->mem_buffer;
 
-	uint32 width = bitmap->dim.x;
-	uint32 height = bitmap->dim.y;
-
-	ASSERT(((width * height) + bottom_left.x + bottom_left.y * dest->width) <= (dest->width * dest->height));
-
-	uint32 end_shift = dest->width - width;
-	for (uint32 y = 0; y < height; y++)
-	{
-		for (uint32 x = 0; x < width; x++)
-		{
-			*dest_ptr = *source_ptr;
-			dest_ptr++;
-			source_ptr++;
-		}
-		dest_ptr += end_shift;
-	}
 #endif
 }
 

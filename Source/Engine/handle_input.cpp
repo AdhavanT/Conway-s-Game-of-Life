@@ -13,8 +13,12 @@ struct IHM
 	uint64 prev_update_tick;
 	uint64 update_tick_time;
 	b32 paused;
+	b32 trigger_pause;
 	vec2i prev_mouse_pos;
 	b32 in_panning_mode;
+	CellType paint_mode;
+
+	MArena arena;
 	//------------------------
 };
 
@@ -24,9 +28,59 @@ void init_input_handler(PL* pl, AppMemory* gm)
 
 	IHM* ihm = (IHM*)gm->input_handling_memory;
 
+	ihm->arena.capacity = Megabytes(1);
+	ihm->arena.overflow_addon_size = 0;
+	ihm->arena.top = 0;
+	ihm->arena.base = MARENA_PUSH(&pl->memory.main_arena, ihm->arena.capacity, "Input Handler Memory Arena");
+	add_monitoring(&ihm->arena);
+	
+	ihm->trigger_pause = FALSE;
+	ihm->paused = TRUE;
 	ihm->prev_update_tick = pl->time.current_millis;
 	ihm->update_tick_time = 100;
 	ihm->prev_mouse_pos = { 0,0 };
+}
+
+
+static MSlice<WorldPos> traverse_grid(WorldPos from, WorldPos to, MArena* arena)
+{
+	MSlice<WorldPos> cell_list;
+	cell_list.init(arena, "traverse_grid cell list");
+	int64 x_diff = to.x - from.x;
+	int64 y_diff = to.y - from.y;
+	int32 x_inc = x_diff >= 0 ? 1 : -1;
+	int32 y_inc = y_diff >= 0 ? 1 : -1;
+	b32 x_longer = ((x_diff >= 0) ? x_diff : -x_diff) >= ((y_diff >= 0) ? y_diff : -y_diff);
+	
+	f32 slope = (y_diff == 0 || x_diff == 0) ? 0 : (x_longer)?(y_diff / (f32)x_diff) : (x_diff / (f32)y_diff);
+
+	int32 steps = (x_longer == FALSE) ? ((y_diff >= 0) ? y_diff : -y_diff) : ((x_diff >= 0) ? x_diff : -x_diff);
+
+
+	if (x_longer == TRUE)
+	{
+		for (int64 i = 0; i < steps; i++)
+		{
+			WorldPos cell;
+			int64 y_new;
+			y_new = f32_to_int64((f32)i * (f32)x_inc * slope) + from.y;
+			cell = { from.x + (i * x_inc), y_new };
+			cell_list.add(arena,cell);
+		}
+	}
+	else
+	{
+		for (int64 i = 0; i < steps; i++)
+		{
+			WorldPos cell;
+			int64 x_new;
+			x_new = f32_to_int64((f32)i * (f32)y_inc * slope) + from.x;
+			cell = { x_new, from.y + (i * y_inc) };
+			cell_list.add(arena, cell);
+		}
+	}
+	return cell_list;
+
 }
 
 static void update_input_handler(PL* pl, AppMemory* gm)
@@ -36,17 +90,35 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 	if (pl->input.keys[PL_KEY::SPACE].pressed)
 	{
-		ihm->paused = !ihm->paused;
+		if (gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING)
+		{
+			ihm->paused = !ihm->paused;
+		}
+		else
+		{
+			ASSERT(!ihm->paused);	//It should not be paused unless the cellgrid_status is FINISHED_PROCESSING.
+			ihm->trigger_pause = TRUE;
+		}
 	}
 
-	if (pl->input.mouse.middle.pressed)	//in panning mode
+	if (ihm->trigger_pause)
+	{
+		ASSERT(ihm->paused == FALSE);
+		if (gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING)
+		{
+			ihm->paused = TRUE;
+			ihm->trigger_pause = FALSE;	//releasing trigger
+		}
+	}
+
+	if (pl->input.mouse.middle.pressed || pl->input.keys[PL_KEY::F].pressed)	//in panning mode
 	{
 		ASSERT(ihm->in_panning_mode != TRUE);
 		ihm->in_panning_mode = TRUE;
 		ihm->prev_mouse_pos = { pl->input.mouse.position_x,pl->input.mouse.position_y };
 	}
 
-	if (pl->input.mouse.middle.released)
+	if (pl->input.mouse.middle.released || pl->input.keys[PL_KEY::F].released)
 	{
 		ihm->in_panning_mode = FALSE;
 	}
@@ -120,68 +192,69 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 	}
 
 
+	if (pl->input.keys[PL_KEY::NUM_0].down)
+	{
+		ihm->paint_mode = CellType::EMPTY;
+	}
+
+	if (pl->input.keys[PL_KEY::NUM_1].down)
+	{
+		ihm->paint_mode = CellType::SAND;
+	}
+
+	if (pl->input.keys[PL_KEY::NUM_2].down)
+	{
+		ihm->paint_mode = CellType::BRICK;
+	}
+
+	if (pl->input.keys[PL_KEY::NUM_3].down)
+	{
+		ihm->paint_mode = CellType::CONWAY;
+	}
+
 	if (ihm->paused)
 	{
+		pl_debug_print("Active paint brush: %i\n", (int32)ihm->paint_mode);
+
 		if (pl->input.keys[PL_KEY::LEFT_SHIFT].down)
 		{
-			if (pl->input.mouse.left.down)	//adding cell
+			static WorldPos prev_coords = { INT64MAX, INT64MAX };
+			WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
+			screen_coords = screen_to_world(screen_coords, gm->cm);
+
+			if (screen_coords != prev_coords)
 			{
-				//Set state of cell.
-
-				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
-				screen_coords = screen_to_world(screen_coords, gm->cm);
-
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
-				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
-				//add only if state is false (doesn't exist in table). 
-				if (!state)
+				if (pl->input.mouse.left.down)	//adding cell
 				{
-					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
-				}
-			}
-			else if (pl->input.mouse.right.down)	//removing cell
-			{
-				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
-				screen_coords = screen_to_world(screen_coords, gm->cm);
-
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
-
-				LiveCellNode* front = gm->active_table->table_front[slot];
-				if (front == 0)
-				{
-					goto ABORT_MULTI_CELL_REMOVAL;
-				}
-				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
-				{
-					gm->active_table->table_front[slot] = front->next;
-				}
-				else
-				{
-					LiveCellNode* prev = front;
-					LiveCellNode* next = front->next;
-					if (next == 0)
+					
+					if (ihm->paint_mode != CellType::EMPTY)
 					{
-						goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist.
-					}
-					else
-					{
-						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
+						MSlice<WorldPos> cell_list = traverse_grid(prev_coords, screen_coords, &ihm->arena);
+						for (uint32 i = 0; i < cell_list.size; i++)
 						{
-							prev = next;
-							next = next->next;
-							if (next == 0)
-							{
-								goto ABORT_MULTI_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
-							}
+							uint32 slot = hash_pos(cell_list[i], gm->active_table->table.size);
+							LiveCellNode ad = { NULL, cell_list[i], ihm->paint_mode, NULL };
+							append_new_node(gm->active_table, slot, ad);
 						}
-						prev->next = next->next;
-					}
+						cell_list.clear(&ihm->arena);
 
+					}
 				}
-				gm->cell_removed_from_table = TRUE;
-			ABORT_MULTI_CELL_REMOVAL:;
+
+				else if (pl->input.mouse.right.down)	//removing cell
+				{
+					MSlice<WorldPos> cell_list = traverse_grid(prev_coords, screen_coords, &ihm->arena);
+					for (uint32 i = 0; i < cell_list.size; i++)
+					{
+						uint32 slot = hash_pos(cell_list[i], gm->active_table->table.size);
+						purge_cell(gm->active_table, slot, cell_list[i]);
+					}
+					cell_list.clear(&ihm->arena);
+				}
+
+				prev_coords = screen_coords;
 			}
+
 		}
 		else
 		{
@@ -192,13 +265,30 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
-				b32 state = lookup_cell(gm->active_table, slot, screen_coords);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
+				LiveCellNode* cell = get_cell(gm->active_table, slot, screen_coords);
 				//add only if state is false (doesn't exist in table). 
-				if (!state)
+				if (cell == NULL)
 				{
-					//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
-					append_new_node(gm->active_table, slot, screen_coords);
+					if (ihm->paint_mode != CellType::EMPTY)
+					{
+						if (ihm->paint_mode == CellType::SAND)
+						{
+
+							LiveCellNode ad = { NULL, screen_coords, ihm->paint_mode, NULL };
+							append_new_node(gm->active_table, slot, ad);
+						}
+						else
+						{
+							LiveCellNode ad = { NULL, screen_coords, ihm->paint_mode, NULL };
+							append_new_node(gm->active_table, slot, ad);
+						}
+						//pl_debug_print("Added: [%i, %i]\n", screen_coords.x, screen_coords.y);
+					}
+				}
+				else if (cell->type != ihm->paint_mode)
+				{
+					cell->type = ihm->paint_mode;
 				}
 			}
 			else if (pl->input.mouse.right.pressed)	//removing cell
@@ -206,51 +296,20 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 				WorldPos screen_coords = { (int64)pl->input.mouse.position_x - (pl->window.width / 2),(int64)pl->input.mouse.position_y - (pl->window.height / 2) };
 				screen_coords = screen_to_world(screen_coords, gm->cm);
 
-				uint32 slot = hash_pos(screen_coords, gm->table_size);
+				uint32 slot = hash_pos(screen_coords, gm->active_table->table.size);
 
-				LiveCellNode* front = gm->active_table->table_front[slot];
-				if (front == 0)
-				{
-					goto ABORT_CELL_REMOVAL;
-				}
-				if (front->pos.x == screen_coords.x && front->pos.y == screen_coords.y)
-				{
-					gm->active_table->table_front[slot] = front->next;
-				}
-				else
-				{
-					LiveCellNode* prev = front;
-					LiveCellNode* next = front->next;
-					if (next == 0)
-					{
-						goto ABORT_CELL_REMOVAL;	//Cell doesn't exist.
-					}
-					else
-					{
-						while ((next->pos.x != screen_coords.x && next->pos.y != screen_coords.y))
-						{
-							prev = next;
-							next = next->next;
-							if (next == 0)
-							{
-								goto ABORT_CELL_REMOVAL;	//Cell doesn't exist. End of list. 
-							}
-						}
-						prev->next = next->next;
-					}
-				}
-				gm->cell_removed_from_table = TRUE;
-			ABORT_CELL_REMOVAL:;
+				purge_cell(gm->active_table, slot, screen_coords);
 			}
 		}
 
 	}
 
-	if (!ihm->paused && (pl->time.current_millis >= ihm->prev_update_tick + ihm->update_tick_time))
+
+	if (!ihm->paused && (pl->time.current_millis >= ihm->prev_update_tick + ihm->update_tick_time) &&(gm->cellgrid_status == CellGridStatus::FINISHED_PROCESSING))
 	{
 		//update grid
 		ihm->prev_update_tick = pl->time.current_millis;
-		gm->update_grid_flag = TRUE;
+		gm->cellgrid_status = CellGridStatus::TRIGGER_PROCESSING;
 	}
 
 
@@ -262,6 +321,9 @@ static void update_input_handler(PL* pl, AppMemory* gm)
 
 void shutdown_input_handler(PL* pl, AppMemory* gm)
 {
+	IHM* ihm = (IHM*)gm->input_handling_memory;
+	remove_monitoring(&ihm->arena);
+	MARENA_POP(&pl->memory.main_arena,ihm->arena.capacity, "Input Handler Memory Arena");
 	MARENA_POP(&pl->memory.main_arena, sizeof(IHM), "Input Handling memory struct");
 }
 

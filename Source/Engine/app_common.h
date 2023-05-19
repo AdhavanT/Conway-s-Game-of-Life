@@ -3,23 +3,32 @@
 
 typedef Vec2<int64> WorldPos;
 
-struct LiveCellNode
+enum class CellType
 {
-	WorldPos pos;
-	LiveCellNode* next;
+	EMPTY = 0,
+	SAND,
+	CONWAY,
+	BRICK
 };
 
-struct NewCellNode
+struct SandCellData
 {
+	
+};
+
+struct LiveCellNode
+{
+	LiveCellNode* next;
 	WorldPos pos;
-	NewCellNode* next;
+	CellType type;
+	void* cell_data;
 };
 
 struct Hashtable
 {
-	LiveCellNode** table_front;
-	MArena arena;
+	MSlice<LiveCellNode*> table;
 	MSlice<LiveCellNode> node_list;
+	MArena arena;
 };
 
 struct CameraState
@@ -33,23 +42,27 @@ struct CameraState
 
 };
 
+//NOTE: This is only possible with C++11. 
+//If compiling in C, make sure this is 4 bytes (to allign with the thread safe, 32 bit interlocked compare and exchange)
+enum CellGridStatus
+{
+	TRIGGER_PROCESSING,
+	PROCESSING,
+	FINISHED_PROCESSING
+};
+
 struct AppMemory
 {
 	//double buffer hashtable
-	uint32 table_size;
-
 	Hashtable* active_table;
 	//------------------------
 
 	
-	b32 update_grid_flag;	//tells the grid processor to iterate over table instead of stack 
-
+	CellGridStatus cellgrid_status;
 
 	b32 camera_changed;		//tells the renderer to recalculate the WorldPos for each pixel.
 
 	//------------------------
-	b32 cell_removed_from_table;	//Tells the grid processor that a cell was removed from the hash table. 
-
 
 	CameraState cm;
 
@@ -64,6 +77,7 @@ void handle_input(PL* pl, AppMemory* gm);
 void shutdown_input_handler(PL* pl, AppMemory* gm);
 
 void init_grid_processor(PL* pl, AppMemory* gm);
+CellGridStatus query_cellgrid_update_state(AppMemory* gm);
 void cellgrid_update_step(PL* pl, AppMemory* gm);
 void shutdown_grid_processor(PL* pl, AppMemory* gm);
 
@@ -80,38 +94,102 @@ static FORCEDINLINE uint32 hash_pos(WorldPos value, uint32 table_size)
 	return hash;
 }
 
+#define INVALID_CELL INT64MAX
 
-static inline b32 lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+static inline b32 purge_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
 {
-	LiveCellNode* front = ht->table_front[slot_index];
+	LiveCellNode* it = ht->table[slot_index];
+	if (it == 0)
+	{
+		return FALSE;
+	}
+	else
+	{
+		if (it->pos.x == pos.x && it->pos.y == pos.y)
+		{
+			it->type = CellType::EMPTY;
+			ht->table[slot_index] = it->next;
+			return TRUE;
+		}
+		else
+		{
+			LiveCellNode* prev = it;
+			LiveCellNode* next = it->next;
+			if (next == 0)
+			{
+				return FALSE;	//Cell doesn't exist.
+			}
+			else
+			{
+				while ((next->pos.x != pos.x && next->pos.y != pos.y))
+				{
+					prev = next;
+					next = next->next;
+					if (next == 0)
+					{
+						return FALSE;	//Cell doesn't exist. End of list. 
+					}
+				}
+				next->type = CellType::EMPTY;
+				prev->next = next->next;
+				return TRUE;
+			}
+		}
+	}
+}
+
+static inline CellType lookup_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* front = ht->table[slot_index];
 	while (front != 0)
 	{
 		if (front->pos.x == pos.x && front->pos.y == pos.y)
 		{
-			return TRUE;
+			return front->type;
 		}
 		front = front->next;
 	}
-	return FALSE;
+	return CellType::EMPTY;
 }
  
+static inline LiveCellNode* get_cell(Hashtable* ht, uint32 slot_index, WorldPos pos)
+{
+	LiveCellNode* front = ht->table[slot_index];
+	while (front != 0)
+	{
+		if (front->pos.x == pos.x && front->pos.y == pos.y)
+		{
+			return front;
+		}
+		front = front->next;
+	}
+	return NULL;
+}
+
 //---d--
 extern int32 max_hash_depth;
 //---d--
 
-static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos)
+static inline void append_new_node(Hashtable* ht, uint32 hash_index, LiveCellNode cell)
 {
 	//---d--
 	int32 depth = 1;
 	//---d--
 
+	//checking if already in table 
+	LiveCellNode* cell_in_table = get_cell(ht, hash_index, cell.pos);
+	if (cell_in_table != NULL)
+	{
+		*cell_in_table = cell;
+		return;
+	}
 
-	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, 0 });
+	LiveCellNode* new_node = ht->node_list.add(&ht->arena, cell);
 	//append to table list
-	LiveCellNode* iterator = ht->table_front[hash_index];
+	LiveCellNode* iterator = ht->table[hash_index];
 	if (iterator == 0)
 	{
-		ht->table_front[hash_index] = new_node;
+		ht->table[hash_index] = new_node;
 	}
 	else
 	{
