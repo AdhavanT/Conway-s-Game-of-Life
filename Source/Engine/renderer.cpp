@@ -44,8 +44,8 @@ struct Bitmap
 vec3f cell_color[] =
 {
 	{0.1f,0.1f,0.1f},   //EMPTY
-	{ .2f,.5f,0.6f },	//CONWAY_LIVE
 	{ .65f,.5f,0.0f },  //SAND
+	{ .2f,.5f,0.6f },	//CONWAY_LIVE
 	{ .7f, .2f,.2f}		//BRICK
 };
 
@@ -395,7 +395,7 @@ void calculate_worldpos(AppMemory* gm, FrameBuffer& fb)
 			__m128 orred_result_4x = _mm_or_ps(x_below_zero_4x, x_above_zero_4x);
 			__m128i int_result = _mm_cvttps_epi32(orred_result_4x);
 			*/
-			//NOTE: This is ridiculous. Below is one instruction that rounds to nearest before cast to int....instead of the above. Ughhh...Why didn't I realize this sooner!!
+			//NOTE: This is ridiculous. Below is one instruction that rounds to nearest before cast to int....instead of the above.
 			__m128i int_result = _mm_cvtps_epi32(x_screen_coord_4x);
 			//turning those 4 int32s into 2 int64s. 
 			__m128i first_two_results = _mm_cvtepi32_epi64(int_result);

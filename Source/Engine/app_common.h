@@ -3,19 +3,25 @@
 
 typedef Vec2<int64> WorldPos;
 
-enum CellType
+enum class CellType
 {
 	EMPTY = 0,
-	CONWAY_LIVE,
 	SAND,
+	CONWAY,
 	BRICK
+};
+
+struct SandCellData
+{
+	
 };
 
 struct LiveCellNode
 {
+	LiveCellNode* next;
 	WorldPos pos;
 	CellType type;
-	LiveCellNode* next;
+	void* cell_data;
 };
 
 struct Hashtable
@@ -164,14 +170,21 @@ static inline LiveCellNode* get_cell(Hashtable* ht, uint32 slot_index, WorldPos 
 extern int32 max_hash_depth;
 //---d--
 
-static inline void append_new_node(Hashtable* ht, uint32 hash_index, WorldPos pos, CellType type)
+static inline void append_new_node(Hashtable* ht, uint32 hash_index, LiveCellNode cell)
 {
 	//---d--
 	int32 depth = 1;
 	//---d--
 
+	//checking if already in table 
+	LiveCellNode* cell_in_table = get_cell(ht, hash_index, cell.pos);
+	if (cell_in_table != NULL)
+	{
+		*cell_in_table = cell;
+		return;
+	}
 
-	LiveCellNode* new_node = ht->node_list.add(&ht->arena, { pos, type,0 });
+	LiveCellNode* new_node = ht->node_list.add(&ht->arena, cell);
 	//append to table list
 	LiveCellNode* iterator = ht->table[hash_index];
 	if (iterator == 0)
