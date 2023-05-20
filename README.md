@@ -5,6 +5,6 @@ A little infitnite-grid cellular automata engine
   * Multi-Threaded grid processing 
   * Infinite grid 
   
-Note: Currently runs a version of Conway's GOF.
+Note: Currently simulates Conway's GOF, Sand and Brick.
 ![Demo](renderer_new3.gif)
 
